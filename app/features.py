@@ -26,8 +26,10 @@ import config
 from app.log import get
 
 ROOT = Path(__file__).resolve().parents[1]
+#: Обучающий расчёт признаков и загрузка минуток лежат в `research/`. Каталог
+#: добавляется в sys.path, а не оформлен пакетом, чтобы модули импортировались
+#: под теми же именами, что и при обучении, — иначе это была бы уже другая сборка.
 sys.path.insert(0, str(ROOT / "research"))
-sys.path.insert(0, str(ROOT.parent / "daily_btc_notebook"))
 
 import btc_data as bd  # noqa: E402
 import features as train_features  # noqa: E402  — тот же модуль, что при обучении
@@ -50,7 +52,7 @@ def load_minutes(hour_start: pd.Timestamp, cutoff: int | None = None,
     """
     cut = decision_time(hour_start, cutoff)
     start = cut - pd.Timedelta(days=days)
-    m1 = bd.load_1m(start=start, verbose=False)
+    m1 = bd.load_1m(start=start, cache_dir=config.CACHE_DIR, verbose=False)
     return m1[m1.index < cut]
 
 
@@ -105,6 +107,13 @@ def for_market(hour_start: pd.Timestamp, cutoff: int | None = None) -> pd.Series
 # Самопроверка
 # --------------------------------------------------------------------------
 
+#: Сколько суток истории брать на самопроверку. Ей нужен разгон скользящих
+#: (самая длинная — 720 часов) плюс запас на выборку часов; 240 суток дают это
+#: с избытком. Раньше проверка тянула историю с 2025-01-01: на сервере это лишние
+#: месячные архивы и десятки мегабайт кэша ради того же самого ответа.
+VERIFY_DAYS = 240
+
+
 def verify(n: int = 6, cutoff: int | None = None) -> float:
     """Сверяет живой путь с обучающим на случайных исторических часах.
 
@@ -113,7 +122,8 @@ def verify(n: int = 6, cutoff: int | None = None) -> float:
     училась. Допуск — ноль.
     """
     cutoff = config.CUTOFF_MINUTES if cutoff is None else cutoff
-    m1 = bd.load_1m(start="2025-01-01", verbose=False)
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=VERIFY_DAYS)
+    m1 = bd.load_1m(start=start, cache_dir=config.CACHE_DIR, verbose=False)
     batch = train_features.build(m1, cutoff=cutoff)
     cols = [c for c in batch.columns if c != "y"]
 

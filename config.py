@@ -131,5 +131,11 @@ MODEL_PATH = ROOT / "models" / "model.joblib"
 DB_PATH = ROOT / "data" / "bot.db"
 LOG_DIR = ROOT / "logs"
 
+#: Кэш минуток Binance (parquet, качается с data.binance.vision по мере надобности).
+#: Держим рядом с базой, а не там, где лежит btc_data.py: так всё изменяемое
+#: состояние в одном каталоге — его целиком покрывает .gitignore, и на сервере
+#: понятно, что можно снести, чтобы освободить место.
+CACHE_DIR = ROOT / "data" / "cache"
+
 #: WebSocket CLOB.
 WS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws"

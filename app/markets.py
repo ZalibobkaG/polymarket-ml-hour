@@ -253,7 +253,8 @@ def outcome_from_binance(hour_start: pd.Timestamp) -> str | None:
     end = hour_start + pd.Timedelta(hours=1)
     if pd.Timestamp.now(tz="UTC") < end:
         return None
-    m1 = bd.load_1m(start=hour_start - pd.Timedelta(minutes=5), verbose=False)
+    m1 = bd.load_1m(start=hour_start - pd.Timedelta(minutes=5),
+                    cache_dir=config.CACHE_DIR, verbose=False)
     candle = m1[(m1.index >= hour_start) & (m1.index < end)]
     if candle.empty or candle.index[-1] < end - pd.Timedelta(minutes=1):
         return None                  # свеча ещё не полная

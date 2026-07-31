@@ -34,9 +34,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-#: Загрузка минуток и вспомогательные индикаторы переиспользуются из исследования.
-RESEARCH_ROOT = Path(__file__).resolve().parents[2] / "daily_btc_notebook"
-sys.path.insert(0, str(RESEARCH_ROOT))
+#: Загрузка минуток и вспомогательные индикаторы лежат рядом, в этом же каталоге.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import btc_data as bd  # noqa: E402
 from btc_features import _asymmetry, _dist_pct, _ma, _rsi, _streak  # noqa: E402
