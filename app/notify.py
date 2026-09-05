@@ -25,7 +25,15 @@ from app.log import get
 log = get("notify")
 
 _API = "https://api.telegram.org/bot{token}/sendMessage"
+_API_DOC = "https://api.telegram.org/bot{token}/sendDocument"
 _TIMEOUT = 10.0
+#: Отправка файла — это загрузка, а не короткий POST: даём ей больше времени.
+_DOC_TIMEOUT = 60.0
+#: Потолок Telegram на загрузку файла ботом — 50 МБ. Держим запас: смысла
+#: упираться в границу нет, а внятный отказ лучше, чем ошибка от API.
+_MAX_DOC_BYTES = 45 * 1024 * 1024
+#: Ограничение Telegram на подпись к файлу.
+_MAX_CAPTION = 1024
 
 
 def enabled() -> bool:
@@ -74,6 +82,39 @@ def send(text: str, silent: bool = False) -> bool:
         return True
     except Exception as e:                                   # noqa: BLE001
         log.warning("не удалось отправить в telegram: %s", _mask(str(e)))
+        return False
+
+
+def send_document(data: bytes, filename: str, caption: str = "",
+                  silent: bool = True) -> bool:
+    """Отправить файл в чат. Возвращает True, если Telegram его принял.
+
+    Как и `send`, ошибку не выбрасывает: не доехавший лог — неприятность,
+    а не повод ронять поток команд.
+    """
+    if not enabled():
+        log.debug("telegram не настроен, файл не отправлен")
+        return False
+    if not data:
+        log.warning("нечего отправлять: файл пуст")
+        return False
+    if len(data) > _MAX_DOC_BYTES:
+        log.warning("файл %s не отправлен: %.1f МБ больше потолка %.0f МБ",
+                    filename, len(data) / 1024 / 1024, _MAX_DOC_BYTES / 1024 / 1024)
+        return False
+    try:
+        r = httpx.post(
+            _API_DOC.format(token=config.TELEGRAM_BOT_TOKEN),
+            data={"chat_id": config.TELEGRAM_CHAT_ID,
+                  "disable_notification": str(silent).lower(),
+                  **({"caption": caption[:_MAX_CAPTION],
+                      "parse_mode": "HTML"} if caption else {})},
+            files={"document": (filename, data, "text/plain; charset=utf-8")},
+            timeout=_DOC_TIMEOUT)
+        r.raise_for_status()
+        return True
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("не удалось отправить файл в telegram: %s", _mask(str(e)))
         return False
 
 

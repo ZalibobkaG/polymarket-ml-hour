@@ -31,6 +31,7 @@ import pandas as pd
 
 import config
 from app import commands, features, notify, risk, storage
+from app import log as applog
 from app.log import get
 
 log = get("main")
@@ -38,6 +39,10 @@ log = get("main")
 #: Как часто крутится основной цикл. Решение привязано к часу, а не к тику,
 #: поэтому частый опрос нужен только для отслеживания заполнения.
 TICK_SECONDS = 30
+
+#: Сколько строк лога шлёт `/log` без аргумента. Сутки — это около тысячи строк,
+#: так что по умолчанию уезжает примерно последний день, а не весь файл.
+LOG_TAIL_LINES = 2000
 
 
 def cmd_check(live_order: bool = False) -> int:
@@ -191,6 +196,43 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         bot.paused = False
         return "▶️ Продолжаю. Ставки со следующего часа."
 
+    def log_cmd(arg: str = "") -> str:
+        """Прислать текущий лог файлом. `/log` — хвост, `/log all` — целиком.
+
+        По умолчанию хвост, а не весь файл: за сутки набегает под тысячу строк,
+        и читать с телефона интересен обычно конец. Число строк можно задать
+        явно: `/log 500`.
+        """
+        arg = (arg or "").strip().lower()
+        if arg in ("", "tail"):
+            lines: int | None = LOG_TAIL_LINES
+        elif arg in ("all", "весь", "всё", "full"):
+            lines = None
+        elif arg.isdigit() and int(arg) > 0:
+            lines = int(arg)
+        else:
+            return ("Не понял аргумент. Так можно:\n"
+                    f"/log — последние {LOG_TAIL_LINES} строк\n"
+                    "/log 500 — последние 500 строк\n"
+                    "/log all — файл целиком")
+
+        try:
+            data = applog.tail(lines)
+        except FileNotFoundError as e:
+            return str(e)
+        if not data:
+            return "Лог пуст — писать пока нечего."
+
+        now = dt.datetime.now(dt.timezone.utc)
+        name = f"bot-{now:%Y%m%d-%H%M}Z.txt"
+        n_lines = data.count(b"\n")
+        what = "целиком" if lines is None else f"последние {n_lines} строк"
+        caption = (f"📄 <b>Лог</b> ({what}, {len(data) / 1024:.0f} КБ)\n"
+                   f"{applog.path().name} на {now:%d.%m %H:%M} UTC")
+        if notify.send_document(data, name, caption=caption):
+            return ""                       # файл уже ушёл, дублировать нечем
+        return "Не удалось отправить файл — подробности в логе."
+
     def stats_cmd(_: str = "") -> str:
         with storage.session() as s:
             month = storage.stats(s, dt.datetime.now(dt.timezone.utc)
@@ -207,10 +249,12 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                 f"пропущено {month.get('пропущено', 0)}")
 
     handlers = {"stop": stop_cmd, "status": status, "pause": pause,
-                "resume": resume, "stats": stats_cmd}
+                "resume": resume, "stats": stats_cmd, "log": log_cmd}
     handlers["help"] = lambda _="": ("Команды:\n"
                                      "/status — что происходит сейчас\n"
                                      "/stats — итоги за 30 дней\n"
+                                     "/log — прислать лог файлом "
+                                     "(/log 500, /log all)\n"
                                      "/pause — не делать новых ставок\n"
                                      "/resume — снять паузу\n"
                                      "/stop — остановить бота")
