@@ -1,0 +1,23 @@
+{
+  "kit": "poly_hourly_kit",
+  "kit_version": "1.0",
+  "model_id": "ca2589be653a",
+  "features_sha256": "685ed4d6fd468f494fd3a13e7325a78a00f57eaa3f51cbff4ee3ad1b3ccbc951",
+  "fixtures": {
+    "minutes_csv_gz_sha256": "ea9a5555442e1b379c7ba7ca051e9a46e583623da3bd98e3ee16848b0c850169",
+    "reference_csv_sha256": "77e9c3751bf8cad257b34ef96c66c4366def2994fdc0fdb37f00576962c00673",
+    "rows": 200,
+    "minute_rows": 32098,
+    "warmup_hours": 336,
+    "first_hour_utc": "2026-08-27T08:00:00+00:00",
+    "last_hour_utc": "2026-09-04T15:00:00+00:00",
+    "generated_at_utc": "2026-09-04T18:49:42+00:00"
+  },
+  "environment": {
+    "python": "3.13.2",
+    "lightgbm": "4.5.0",
+    "numpy": "2.2.6",
+    "pandas": "2.2.3"
+  },
+  "note": "Паспорт комплекта. features_sha256 — контрольная сумма побитовой копии файла признаков; при импорте она сверяется, и при расхождении расчёт останавливается. Контрольная сумма самой модели лежит в model/poly_hourly.json."
+}

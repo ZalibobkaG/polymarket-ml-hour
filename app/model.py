@@ -1,14 +1,18 @@
-"""Загрузка обученной модели и прогноз.
+"""Прогноз часовой модели — комплект `poly_hourly_kit` (обучен напарником).
 
-Модель собирается `research/retrain.py` и лежит в `models/model.joblib` вместе
-со списком признаков и карточкой. Здесь — только применение.
+Модель, признаки и их проверка контрольной суммой живут в `poly_hourly_kit/` —
+герметичном комплекте, который не нужно и нельзя редактировать (см. его
+`README.md`). Здесь — только: путь до него, сверка обрезки свечи с конфигом при
+старте и hot-reload модели, чтобы переобучение (`main.py retrain`) подхватывалось
+без перезапуска бота.
 """
 
 from __future__ import annotations
 
-from functools import lru_cache
+import hashlib
+import sys
+from pathlib import Path
 
-import joblib
 import pandas as pd
 
 import config
@@ -16,39 +20,63 @@ from app.log import get
 
 log = get("model")
 
+ROOT = Path(__file__).resolve().parents[1]
+KIT_DIR = ROOT / "poly_hourly_kit"
+if str(KIT_DIR) not in sys.path:
+    sys.path.insert(0, str(KIT_DIR))
 
-@lru_cache(maxsize=1)
-def bundle() -> dict:
-    path = config.MODEL_PATH
-    if not path.exists():
-        raise FileNotFoundError(
-            f"нет {path} — соберите модель: python research/retrain.py --cutoff "
-            f"{config.CUTOFF_MINUTES}")
-    b = joblib.load(path)
-    card = b.get("card", {})
-    trained_cutoff = b.get("cutoff", card.get("обрезка_минут"))
-    if trained_cutoff != config.CUTOFF_MINUTES:
-        # Это ровно тот случай, когда бот молча торговал бы не той моделью.
-        raise ValueError(
-            f"модель обучена на обрезке {trained_cutoff} мин, а в конфиге "
-            f"{config.CUTOFF_MINUTES} — вход не совпадёт с обучением")
-    log.info("модель загружена: %d признаков, обрезка %s мин, обучена по %s",
-             len(b["features"]), trained_cutoff,
-             card.get("обучено", {}).get("по", "?"))
-    return b
+import kit.candles as _kc  # noqa: E402  — комплект напарника, не модуль этого проекта
+import kit.predict as _kp  # noqa: E402
+
+_MODEL_TXT = KIT_DIR / "model" / "poly_hourly.txt"
+
+# Провал здесь — ровно тот случай, когда бот молча торговал бы не той моделью:
+# признаки в бою обрезаны на CUTOFF_MINUTES, комплект обучен на обрезке kit.candles
+# CUTOFF_MINUTES, и если числа разошлись, вход не совпадёт с обучением ни на бит.
+if _kc.CUTOFF_MINUTES != config.CUTOFF_MINUTES:
+    raise ValueError(
+        f"poly_hourly_kit обучен на обрезке {_kc.CUTOFF_MINUTES} мин, а в конфиге "
+        f"CUTOFF_MINUTES={config.CUTOFF_MINUTES} — вход не совпадёт с обучением")
+
+_last_sha: str | None = None
 
 
-def predict(feats: pd.Series) -> float:
-    """Вероятность того, что часовая свеча закроется не ниже, чем открылась."""
-    b = bundle()
-    missing = [c for c in b["features"] if c not in feats.index]
-    if missing:
-        raise ValueError(f"в признаках не хватает колонок: {missing}")
-    x = feats[b["features"]].to_frame().T.astype("float64")
-    if x.isna().any().any():
-        raise ValueError(f"NaN в признаках: {list(x.columns[x.isna().any()])}")
-    return float(b["model"].predict_proba(x)[0, 1])
+def reload_if_changed() -> bool:
+    """Перечитать модель, если файлы в `poly_hourly_kit/model/` обновились.
+
+    `kit/predict.py` кэширует бустер в собственном модульном кэше навсегда —
+    расcчитано на короткоживущий процесс. У нас процесс живёт неделями, а
+    `main.py retrain` кладёт новую модель в тот же каталог, не трогая бота, —
+    поэтому кэш сбрасывается отсюда, по контрольной сумме файла модели.
+    Возвращает True, если модель только что сменилась (не при первой загрузке).
+    """
+    global _last_sha
+    if not _MODEL_TXT.exists():
+        return False
+    sha = hashlib.sha256(_MODEL_TXT.read_bytes()).hexdigest()
+    if sha == _last_sha:
+        return False
+    changed = _last_sha is not None
+    _last_sha = sha
+    _kp._model_cache = None
+    if changed:
+        log.info("модель перечитана после переобучения: %s", sha[:12])
+    return changed
+
+
+reload_if_changed()  # первая загрузка процесса — не «переобучение», просто старт
+
+
+def predict(minutes: pd.DataFrame, hour_start: pd.Timestamp) -> dict:
+    """Прогноз на час `hour_start`. Тонкая обёртка над `kit.predict.predict()`.
+
+    Возвращает словарь с полями `p_up`, `side`, `model_id`, `decision_time_utc`,
+    `feature_hour_utc` — см. `poly_hourly_kit/kit/predict.py`.
+    """
+    reload_if_changed()
+    return _kp.predict(minutes, hour_start)
 
 
 def card() -> dict:
-    return bundle().get("card", {})
+    """Паспорт текущей модели (`poly_hourly_kit/model/poly_hourly.json`)."""
+    return _kp._load_model()["meta"]

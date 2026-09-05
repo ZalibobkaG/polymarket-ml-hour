@@ -194,8 +194,8 @@ class Bot:
             self._mark_skipped(hour_start, "рынок не принимает ордера")
             return
 
-        feats = features.for_market(hour_start)
-        proba = model.predict(feats)
+        minutes = features.for_market(hour_start)
+        proba = model.predict(minutes, hour_start)["p_up"]
         # Стакан читаем по той стороне, на которую собираемся ставить: решение
         # «пассивно или тейкером» зависит от предложения именно по нашему токену.
         side = "Up" if proba >= 0.5 else "Down"

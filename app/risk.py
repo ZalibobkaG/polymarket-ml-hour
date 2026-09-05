@@ -78,10 +78,11 @@ def preflight() -> list[str]:
     try:
         from app import model
         card = model.card()
-        trained = card.get("обрезка_минут")
-        if trained != config.CUTOFF_MINUTES:
-            problems.append(f"модель обучена на обрезке {trained}, "
-                            f"в конфиге {config.CUTOFF_MINUTES}")
+        # Сверка обрезки уже происходит при импорте app/model.py (падает сразу,
+        # если poly_hourly_kit обучен не на том cutoff, что в конфиге) — здесь
+        # достаточно убедиться, что модель вообще загрузилась и не пустая.
+        if not card.get("model_id"):
+            problems.append("модель загрузилась, но в паспорте нет model_id")
     except Exception as e:                                   # noqa: BLE001
         problems.append(f"модель не загружается: {e}")
 

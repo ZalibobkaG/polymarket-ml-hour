@@ -10,10 +10,15 @@
                                Управление из Telegram: /status /stats /pause
                                /resume /stop — только с id из TG_ALLOWED_USER_IDS
     python main.py stats       сводка по накопленным сделкам
+    python main.py retrain     переобучить модель на новых данных (см. app/retrain.py);
+                               живой бот подхватит её сам, без перезапуска
 
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
-    python research/retrain.py --cutoff 2     если модели ещё нет
+
+Модель — комплект `poly_hourly_kit/` от напарника, уже обучена и лежит в репозитории
+готовым файлом. Раз в интервал обучения её стоит обновлять командой `retrain` —
+удобнее всего через cron раз в месяц, см. docstring `app/retrain.py`.
 """
 
 from __future__ import annotations
@@ -39,15 +44,13 @@ def cmd_check(live_order: bool = False) -> int:
     print(f"режим: {'БУМАГА (ордера не отправляются)' if config.DRY_RUN else 'БОЙ'}")
     problems = risk.preflight()
 
-    print("\nсамопроверка признаков (живой путь против обучающего)…")
+    print("\nсамопроверка модели (живые минутки → poly_hourly_kit)…")
     try:
-        worst = features.verify(n=5)
-        if worst > 1e-9:
-            problems.append(f"признаки расходятся с обучающими: {worst:.2e}")
-        else:
-            print("  расхождение ноль — вход совпадает с обучением")
+        ans = features.verify(n=3)
+        print(f"  ок: p_up={ans['p_up']:.4f} на час {ans['feature_hour_utc']}, "
+              f"модель {ans['model_id']}")
     except Exception as e:                                    # noqa: BLE001
-        problems.append(f"самопроверка признаков не прошла: {e}")
+        problems.append(f"самопроверка модели не прошла: {e}")
 
     print("\nсвязь с Polymarket…")
     info = None
@@ -278,7 +281,13 @@ def cmd_stats() -> int:
     return 0
 
 
-COMMANDS = {"check": cmd_check, "once": cmd_once, "run": cmd_run, "stats": cmd_stats}
+def cmd_retrain() -> int:
+    from app import retrain
+    return retrain.run()
+
+
+COMMANDS = {"check": cmd_check, "once": cmd_once, "run": cmd_run, "stats": cmd_stats,
+           "retrain": cmd_retrain}
 
 
 def main() -> int:
