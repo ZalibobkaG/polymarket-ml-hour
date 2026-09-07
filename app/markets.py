@@ -79,7 +79,7 @@ def _get(url: str, params: dict | None = None) -> list | dict:
             return r.json()
         except Exception as e:                      # noqa: BLE001 — важен любой сбой
             last = e
-            log.warning("запрос %s не удался (%s/%s): %s", url, attempt + 1, _RETRIES, e)
+            log.warning("request {} failed ({}/{}): {}", url, attempt + 1, _RETRIES, e)
     raise MarketError(f"не удалось получить {url}: {last}")
 
 
@@ -171,7 +171,7 @@ def ensure_valid(hour_start: pd.Timestamp, force: bool = False) -> None:
     raw = fetch(pd.Timestamp(hour_start))
     validate(raw, pd.Timestamp(hour_start))
     _validated_at = now
-    log.info("правило резолва проверено на %s — Binance BTC/USDT, close >= open",
+    log.info("resolution rule verified on {} — Binance BTC/USDT, close >= open",
              raw.get("slug"))
 
 

@@ -66,11 +66,12 @@ class PaperTrader:
         # оптимистичнее боя.
         ask = book(info.token(side)).get("ask")
         if post_only and ask is not None and ask <= price + 1e-9:
-            log.info("[бумага] ордер отклонён post-only: ask=%.3f ≤ %.3f", ask, price)
+            log.warning("[paper] order rejected post-only: ask={:.3f} ≤ {:.3f}",
+                       ask, price)
             return OrderResult(ok=False, post_only_rejected=True,
                                error="paper: would cross")
-        log.info("[бумага] ордер %s %s × %g по %.2f [%s] (%s)", info.slug, side,
-                 shares, price, "пассивно" if post_only else "можно тейкером", oid)
+        log.success("[paper] order {} {} × {:g} at {:.2f} [{}] ({})", info.slug, side,
+                    shares, price, "passive" if post_only else "can go taker", oid)
         return OrderResult(ok=True, order_id=oid)
 
     def poll_fill(self, info: MarketInfo, side: str, price: float,
@@ -84,14 +85,14 @@ class PaperTrader:
         b = book(info.token(side))
         ask = b.get("ask")
         if ask is not None and ask <= price + 1e-9:
-            log.info("[бумага] исполнение %s: ask=%.3f ≤ %.3f", info.slug, ask, price)
+            log.success("[paper] filled {}: ask={:.3f} ≤ {:.3f}", info.slug, ask, price)
             fee = shares * config.FEE_RATE * ask * (1 - ask)
             return OrderResult(ok=True, filled_shares=shares, fill_price=ask,
                                role="TAKER", fee_usd=fee)
         return OrderResult(ok=True, filled_shares=0.0)
 
     def cancel(self, order_id: str) -> bool:
-        log.info("[бумага] отмена %s", order_id)
+        log.info("[paper] cancel {}", order_id)
         return True
 
     def open_orders(self) -> list[dict]:
@@ -128,7 +129,7 @@ class ClobTrader:
         if config.FUNDER_ADDRESS:
             kwargs["funder"] = config.FUNDER_ADDRESS
         self.client = ClobClient(**kwargs)
-        log.info("подпись: тип %s — %s%s", config.SIGNATURE_TYPE,
+        log.info("signature: type {} — {}{}", config.SIGNATURE_TYPE,
                  SIGNATURE_TYPES[config.SIGNATURE_TYPE],
                  f", funder {config.FUNDER_ADDRESS[:10]}…" if config.FUNDER_ADDRESS else "")
 
@@ -151,7 +152,7 @@ class ClobTrader:
                 self.client.set_api_creds(self.client.create_or_derive_api_key())
             finally:
                 noisy.setLevel(was)
-        log.info("CLOB клиент готов (py-clob-client-v2)")
+        log.success("CLOB client ready (py-clob-client-v2)")
         self.check_funds()
 
     @property
@@ -171,19 +172,19 @@ class ClobTrader:
                 asset_type=AssetType.COLLATERAL,
                 signature_type=config.SIGNATURE_TYPE))
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось проверить баланс: %s", e)
+            log.warning("could not check balance: {}", e)
             return None
 
         balance = float(r.get("balance", 0)) / 1e6            # USDC в 6 знаках
         allowances = r.get("allowances") or {}
         approved = sum(1 for v in allowances.values() if float(v) > 0)
-        log.info("баланс USDC: %.2f$, разрешений выдано: %d", balance, approved)
+        log.info("USDC balance: {:.2f}$, allowances granted: {}", balance, approved)
         if not approved:
-            log.error("нет approval ни на один контракт — ордера будут отклонены; "
-                      "выдайте разрешение в интерфейсе Polymarket")
+            log.error("no approval on any contract — orders will be rejected; "
+                      "grant an allowance in the Polymarket UI")
         need = config.SHARES * config.LIMIT_PRICE
         if balance < need:
-            log.error("на счету %.2f$, для ставки нужно %.2f$", balance, need)
+            log.error("balance {:.2f}$, need {:.2f}$ for the bet", balance, need)
         return balance
 
     def build_order(self, info: MarketInfo, side: str, price: float, shares: float):
@@ -213,22 +214,25 @@ class ClobTrader:
             resp = self.client.post_order(signed, OrderType.GTD, post_only)
         except Exception as e:                                # noqa: BLE001
             if post_only and is_post_only_reject(str(e)):
-                log.info("ордер отклонён post-only: встречка по нашей цене есть, "
-                         "тейкером идти не стали")
+                # Expected and frequent while we wait for the crossing order to
+                # clear — DEBUG, not INFO: `runner` logs a WARNING/SUCCESS summary
+                # once the retry series ends, so this stays out of the way.
+                log.debug("order rejected post-only: our price is crossed, "
+                         "not going taker")
                 return OrderResult(ok=False, post_only_rejected=True, error=str(e))
-            log.exception("ордер не отправлен")
+            log.exception("order not sent")
             return OrderResult(ok=False, error=str(e))
 
         if not resp or not resp.get("success", True):
             err = str(resp.get("errorMsg") or resp) if isinstance(resp, dict) else str(resp)
             if post_only and is_post_only_reject(err):
-                log.info("ордер отклонён post-only: %s", err)
+                log.debug("order rejected post-only: {}", err)
                 return OrderResult(ok=False, post_only_rejected=True, error=err)
             return OrderResult(ok=False, error=err)
         oid = resp.get("orderID") or resp.get("orderId")
-        log.info("ордер отправлен %s %s × %g по %.2f [%s] → %s",
-                 info.slug, side, shares, price,
-                 "пассивно" if post_only else "можно тейкером", oid)
+        log.success("order sent {} {} × {:g} at {:.2f} [{}] → {}",
+                    info.slug, side, shares, price,
+                    "passive" if post_only else "can go taker", oid)
         return OrderResult(ok=True, order_id=oid)
 
     def our_legs(self, info: MarketInfo, order_id: str) -> list[tuple[float, float, str]]:
@@ -263,7 +267,7 @@ class ClobTrader:
         try:
             legs = self.our_legs(info, order_id)
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось прочитать сделки по ордеру %s: %s", order_id, e)
+            log.warning("could not read trades for order {}: {}", order_id, e)
             return OrderResult(ok=False, error=str(e))
         if not legs:
             return OrderResult(ok=True, filled_shares=0.0)
@@ -281,10 +285,10 @@ class ClobTrader:
     def cancel(self, order_id: str) -> bool:
         try:
             self.client.cancel_orders([order_id])
-            log.info("ордер %s отменён", order_id)
+            log.info("order {} cancelled", order_id)
             return True
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось отменить %s: %s", order_id, e)
+            log.warning("could not cancel {}: {}", order_id, e)
             return False
 
     def open_orders(self) -> list[dict]:
@@ -292,14 +296,14 @@ class ClobTrader:
             r = self.client.get_open_orders()
             return r if isinstance(r, list) else (r or {}).get("data", []) or []
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось получить открытые ордера: %s", e)
+            log.warning("could not fetch open orders: {}", e)
             return []
 
 
 def build() -> PaperTrader | ClobTrader:
     """Исполнитель по режиму из конфига."""
     if config.DRY_RUN:
-        log.info("режим БУМАГА: ордера на биржу не отправляются")
+        log.info("PAPER mode: orders are not sent to the exchange")
         return PaperTrader()
-    log.warning("режим БОЙ: ордера отправляются на биржу по-настоящему")
+    log.warning("LIVE mode: orders are sent to the exchange for real")
     return ClobTrader()

@@ -149,7 +149,7 @@ def _migrate(engine) -> None:
                 kind = col.type.compile(engine.dialect)
                 conn.execute(text(f"ALTER TABLE {table.__tablename__} "
                                   f"ADD COLUMN {col.name} {kind}"))
-        log.info("БД: добавлены колонки %s в %s",
+        log.info("DB: added columns {} to {}",
                  ", ".join(c.name for c in missing), table.__tablename__)
 
 

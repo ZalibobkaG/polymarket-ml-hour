@@ -129,7 +129,7 @@ def cmd_once() -> int:
     problems = risk.preflight()
     if problems:
         for p in problems:
-            log.error("предполётная проверка: %s", p)
+            log.error("preflight check: {}", p)
         return 1
     from app.runner import Bot
     bot = Bot()
@@ -265,7 +265,7 @@ def cmd_run() -> int:
     problems = risk.preflight()
     if problems:
         for p in problems:
-            log.error("предполётная проверка: %s", p)
+            log.error("preflight check: {}", p)
         notify.startup(problems)
         return 1
 
@@ -275,8 +275,8 @@ def cmd_run() -> int:
     listener = commands.Listener(_tg_handlers(bot, stop))
     listener.start()
     notify.startup([])
-    log.info("цикл запущен, режим %s, тик %s сек",
-             "БУМАГА" if config.DRY_RUN else "БОЙ", TICK_SECONDS)
+    log.success("loop started, mode {}, tick {}s",
+               "PAPER" if config.DRY_RUN else "LIVE", TICK_SECONDS)
 
     last_summary_day = dt.datetime.now(dt.timezone.utc).date()
     code = 0
@@ -291,18 +291,18 @@ def cmd_run() -> int:
                     notify.daily_summary(storage.stats(s, since), last_summary_day)
                 last_summary_day = today
         except KeyboardInterrupt:
-            log.info("остановка по Ctrl+C")
+            log.info("stopped by Ctrl+C")
             break
         except Exception as e:                                # noqa: BLE001
             # Цикл не должен умирать от единичной ошибки: следующий час важнее.
-            log.exception("ошибка в цикле")
+            log.exception("error in the loop")
             storage.log_event("ERROR", "tick", str(e))
             notify.error("Ошибка в цикле", str(e)[:500])
         # Ожидание прерываемое: команда /stop не должна ждать конца тика.
         stop.wait(TICK_SECONDS)
 
     if stop.is_set():
-        log.info("остановка по команде из Telegram")
+        log.info("stopped via Telegram command")
     listener.stop()
     bot.close()
     return code

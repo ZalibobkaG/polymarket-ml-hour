@@ -89,7 +89,8 @@ class Bot:
                     .filter(storage.Market.status.in_([storage.ORDERED,
                                                        storage.FILLED])).all()]
         for hour_start in ours:
-            log.info("ws: сделка по нашему ордеру на %s — сверяю по REST", hour_start)
+            log.debug("ws: trade event for our order at {} — syncing via REST",
+                     hour_start)
             self._sync_fill(hour_start)
 
     def _revalidate(self) -> None:
@@ -101,7 +102,7 @@ class Bot:
             markets.ensure_valid(next_hour(now), force=True)
             self._last_validation = now
         except Exception as e:                                # noqa: BLE001
-            msg = f"правило резолва рынка изменилось или рынок не найден: {e}"
+            msg = f"resolution rule changed or market not found: {e}"
             log.error(msg)
             storage.log_event("ERROR", "validation", msg)
             notify.error("Проверка рынка", msg)
@@ -120,7 +121,7 @@ class Bot:
             m = storage.get_or_create(s, hour_start.to_pydatetime())
             if m.status != storage.NEW:
                 # В окно попадает несколько тиков подряд — это норма, не шумим в лог.
-                log.debug("%s уже обработан (%s) — пропуск", hour_start, m.status)
+                log.debug("{} already handled ({}) — skipping", hour_start, m.status)
                 return
 
         try:
@@ -144,14 +145,14 @@ class Bot:
         """
         left = (pd.Timestamp(hour_start) - pd.Timestamp.now(tz="UTC")).total_seconds()
         if left > MIN_LEAD_SECONDS and hour_start.to_pydatetime() not in self._dispatched:
-            log.warning("%s: %s — в окне ещё %.0fс, повторю на следующем тике",
+            log.warning("{}: {} — {:.0f}s left in window, retrying next tick",
                         hour_start, exc, left)
             with storage.session() as s:
                 m = storage.get_or_create(s, hour_start.to_pydatetime())
                 m.reason = str(exc)[:2000]
             return
 
-        log.exception("ошибка на рынке %s", hour_start)
+        log.exception("error on market {}", hour_start)
         self._mark_error(hour_start, str(exc))
         notify.error("Ошибка при выставлении ордера",
                      f"{hour_start:%d.%m %H:%M}Z: {exc}")
@@ -174,18 +175,18 @@ class Bot:
             hs = pd.Timestamp(hour_start)
             reason = reason or "решение не состоялось до конца окна"
             self._mark_error(hs, reason)
-            log.error("%s: час потерян — %s", hs, reason)
+            log.error("{}: hour lost — {}", hs, reason)
             notify.error("Час пропущен из-за сбоя", f"{hs:%d.%m %H:%M}Z: {reason}")
 
     def _decide_and_order(self, hour_start: pd.Timestamp) -> None:
         if self.paused:
-            log.info("на паузе — ставка на %s не делается", hour_start)
+            log.info("paused — not betting on {}", hour_start)
             self._mark_skipped(hour_start, "пауза по команде из Telegram")
             return
 
         verdict = risk.check()
         if not verdict.allowed:
-            log.warning("ставка пропущена: %s", verdict.reason)
+            log.warning("bet skipped: {}", verdict.reason)
             self._mark_skipped(hour_start, verdict.reason)
             return
 
@@ -201,7 +202,7 @@ class Bot:
         side = "Up" if proba >= 0.5 else "Down"
         side_book = markets.book(info.token(side))
         d = pricing.decide(proba, tick=info.tick_size, best_ask=side_book.get("ask"))
-        log.info("%s | %s | %s", hour_start, info.slug, pricing.describe(d))
+        log.info("{} | {} | {}", hour_start, info.slug, pricing.describe(d))
 
         book = markets.snapshot(info)
         with storage.session() as s:
@@ -282,7 +283,7 @@ class Bot:
                     m.reason = (f"за {done} попыток пассивно встать не удалось: "
                                 f"встречка по {price:.2f} держалась весь час")
                     reason = m.reason
-                log.info("%s: %s", hs, reason)
+                log.warning("{}: {}", hs, reason)
                 notify.skipped(hs, reason)
                 continue
 
@@ -300,13 +301,13 @@ class Bot:
                     res = self.trader.place(info, d.side, d.price, d.shares,
                                             post_only=config.POST_ONLY and not d.cross)
                 except Exception as e:                        # noqa: BLE001
-                    log.warning("повторная постановка %s не удалась: %s", hs, e)
+                    log.warning("retry placement {} failed: {}", hs, e)
                     break
 
                 done += 1
                 if not res.post_only_rejected:
                     if res.ok:
-                        log.info("%s: ордер лёг с %d-й попытки", hs, done)
+                        log.success("{}: order landed on attempt {}", hs, done)
                     self._record_placement(hs, info, d, res, done,
                                            bid=book.get("bid"), ask=book.get("ask"))
                     break
@@ -344,13 +345,14 @@ class Bot:
                                     post_only=post_only)
             if res.ok or not res.post_only_rejected:
                 if tries > 1:
-                    log.info("%s: встали пассивно с %d-й попытки", hour_start, tries)
+                    log.success("{}: landed passively on attempt {}", hour_start, tries)
                 return res, d, tries
 
             left = (deadline - pd.Timestamp.now(tz="UTC")).total_seconds()
             if left <= config.RETRY_SECONDS or self._stopping():
-                log.info("%s: за %d быстрых попыток не встали, "
-                         "продолжу на тиках до конца часа", hour_start, tries)
+                log.warning("{}: not resting after {} fast attempts, "
+                           "will keep trying on ticks until the hour ends",
+                           hour_start, tries)
                 return res, d, tries
             time.sleep(config.RETRY_SECONDS)
 
@@ -358,12 +360,12 @@ class Bot:
             try:
                 ask = markets.book(info.token(d.side)).get("ask")
             except Exception as e:                            # noqa: BLE001
-                log.warning("стакан не прочитался на попытке %d: %s", tries, e)
+                log.warning("book read failed on attempt {}: {}", tries, e)
                 continue
             fresh = pricing.decide(d.proba_up, tick=info.tick_size, best_ask=ask)
             if fresh.bet:
                 if fresh.cross and not d.cross:
-                    log.info("%s: ask %.2f окупает комиссию — идём тейкером",
+                    log.info("{}: ask {:.2f} covers the fee — going taker",
                              hour_start, ask)
                 d = fresh
 
@@ -397,7 +399,7 @@ class Bot:
                    if self.trader.live
                    else self.trader.poll_fill(info, side, price, shares))
         except Exception as e:                                # noqa: BLE001
-            log.warning("опрос заполнения %s не удался: %s", slug, e)
+            log.warning("fill poll for {} failed: {}", slug, e)
             return
 
         if not res.filled_shares or res.filled_shares <= was + 1e-9:
@@ -411,9 +413,9 @@ class Bot:
             m.fill_role = res.role
             m.fee_usd = res.fee_usd
             m.filled_at = dt.datetime.now(dt.timezone.utc)
-        log.info("исполнение %s %s × %g по %.4f [%s], комиссия %.4f$",
-                 hour_start, side, res.filled_shares, got, res.role or "?",
-                 res.fee_usd)
+        log.success("filled {} {} × {:g} at {:.4f} [{}], fee {:.4f}$",
+                    hour_start, side, res.filled_shares, got, res.role or "?",
+                    res.fee_usd)
         notify.filled(hour_start, side, got, res.filled_shares,
                       role=res.role, fee=res.fee_usd)
 
@@ -440,7 +442,7 @@ class Bot:
             if m and m.status == storage.ORDERED:
                 m.status = storage.UNFILLED
                 m.reason = "не исполнился до конца часа"
-        log.info("%s: ордер не исполнился", hour_start)
+        log.warning("{}: order not filled", hour_start)
 
     # ------------------------------------------------------------------
     # Резолв
@@ -472,7 +474,8 @@ class Bot:
             if pm and pm != outcome:
                 msg = (f"{hs:%d.%m %H:%M}Z: Binance даёт {outcome}, "
                        f"Polymarket {pm} — проверьте правило резолва")
-                log.error(msg)
+                log.error("{:%d.%m %H:%M}Z: Binance says {}, Polymarket says {} "
+                         "— check the resolution rule", hs, outcome, pm)
                 notify.error("Расхождение резолва", msg)
                 storage.log_event("ERROR", "resolve_mismatch", msg)
 
@@ -488,8 +491,11 @@ class Bot:
                 m.outcome, m.won, m.pnl_usd = outcome, won, pnl
                 m.status = storage.RESOLVED
                 m.resolved_at = dt.datetime.now(dt.timezone.utc)
-            log.info("%s резолв %s (%s), ставили %s → %+.2f$",
-                     hs, outcome, source, side or "-", pnl)
+            # Win is a good outcome, loss is a normal priced-in one — not an error.
+            # `won is None` means we had no bet on this hour — neither, just a fact.
+            log_fn = log.info if won is None else (log.success if won else log.warning)
+            log_fn("{} resolved {} (via {}), bet {} → {:+.2f}$",
+                  hs, outcome, source, side or "-", pnl)
             if filled:
                 # Итоги считаем после записи, чтобы этот час уже был в них учтён.
                 midnight = dt.datetime.combine(now.date(), dt.time.min,

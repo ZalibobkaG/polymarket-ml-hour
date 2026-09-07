@@ -83,7 +83,7 @@ class _Channel(threading.Thread):
         if new == self.subscribe.get("markets"):
             return
         self.subscribe["markets"] = new
-        log.info("%s: подписка на %d рынков, переподключение", self.name, len(new))
+        log.info("{}: subscribing to {} markets, reconnecting", self.name, len(new))
         self._drop()
 
     def run(self) -> None:
@@ -98,7 +98,7 @@ class _Channel(threading.Thread):
                 backoff = 1.0                      # успешная сессия сбрасывает паузу
             except Exception as e:                 # noqa: BLE001
                 if not self._stop.is_set():
-                    log.warning("%s: сокет отвалился (%s), переподключение через %.0fс",
+                    log.warning("{}: socket dropped ({}), reconnecting in {:.0f}s",
                                 self.name, e, backoff)
             finally:
                 self.connected.clear()
@@ -114,7 +114,7 @@ class _Channel(threading.Thread):
         try:
             sock.send(json.dumps(self.subscribe))
             self.connected.set()
-            log.info("%s: подписка отправлена (%d рынков)",
+            log.info("{}: subscription sent ({} markets)",
                      self.name, len(self.subscribe.get("markets") or []))
             sock.settimeout(PING_INTERVAL)
             while not self._stop.is_set():
@@ -154,7 +154,7 @@ class _Channel(threading.Thread):
             try:
                 self.on_event(e)
             except Exception:                      # noqa: BLE001
-                log.exception("%s: обработчик события упал", self.name)
+                log.exception("{}: event handler crashed", self.name)
 
 
 def user_channel(on_event: Callable[[dict], None],
@@ -171,8 +171,8 @@ def user_channel(on_event: Callable[[dict], None],
     passphrase = getattr(creds, "api_passphrase", None) or config.API_PASSPHRASE
 
     if not (api_key and secret and passphrase):
-        log.warning("нет L2-кредов — канал user не запущен, "
-                    "исполнение отслеживается опросом по REST")
+        log.warning("no L2 creds — user channel not started, "
+                    "fills are tracked by REST polling")
         return None
     sub = {
         "type": "user",

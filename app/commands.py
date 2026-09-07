@@ -73,7 +73,7 @@ class Listener(threading.Thread):
             self._call("sendMessage", chat_id=chat_id, text=text,
                        parse_mode="HTML", disable_web_page_preview=True)
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось ответить: %s", notify_safe(str(e)))
+            log.warning("failed to reply: {}", notify_safe(str(e)))
 
     def _drain_backlog(self) -> None:
         """Пропустить команды, накопившиеся до запуска.
@@ -83,21 +83,21 @@ class Listener(threading.Thread):
         try:
             updates = self._call("getUpdates", timeout=0, offset=-1) or []
         except Exception as e:                                # noqa: BLE001
-            log.warning("не удалось прочитать старые сообщения: %s", notify_safe(str(e)))
+            log.warning("failed to read old messages: {}", notify_safe(str(e)))
             return
         if updates:
             self._offset = updates[-1]["update_id"] + 1
-            log.info("старые сообщения пропущены (%d)", len(updates))
+            log.info("skipped {} backlog message(s)", len(updates))
 
     def run(self) -> None:
         if not config.TELEGRAM_BOT_TOKEN:
-            log.info("токен не задан — команды из Telegram не принимаются")
+            log.info("no token set — Telegram commands are not accepted")
             return
         if not self.allowed:
-            log.warning("TG_ALLOWED_USER_IDS пуст — команды не принимаются ни от кого; "
-                        "добавьте свой user_id в .env, чтобы включить управление")
+            log.warning("TG_ALLOWED_USER_IDS is empty — no one can command the bot; "
+                        "add your user_id to .env to enable control")
             return
-        log.info("команды из Telegram: %s, разрешено id %s",
+        log.info("Telegram commands: {}, allowed ids {}",
                  " ".join(sorted(self.handlers)), ", ".join(sorted(self.allowed)))
         self._drain_backlog()
 
@@ -107,7 +107,7 @@ class Listener(threading.Thread):
                                      offset=self._offset,
                                      allowed_updates=["message"]) or []
             except Exception as e:                            # noqa: BLE001
-                log.warning("опрос Telegram не удался: %s", notify_safe(str(e)))
+                log.warning("Telegram poll failed: {}", notify_safe(str(e)))
                 self._stop.wait(10)
                 continue
             for u in updates:
@@ -124,7 +124,7 @@ class Listener(threading.Thread):
         chat_id = (msg.get("chat") or {}).get("id")
 
         if author not in self.allowed:
-            log.warning("команда %r от постороннего id %s — игнорирую",
+            log.warning("command {!r} from unauthorized id {} — ignoring",
                         text.split()[0], author or "?")
             return
 
@@ -137,11 +137,11 @@ class Listener(threading.Thread):
                                  + ", ".join("/" + c for c in sorted(self.handlers)))
             return
 
-        log.info("команда /%s от %s", cmd, author)
+        log.info("command /{} from {}", cmd, author)
         try:
             answer = handler(arg.strip())
         except Exception as e:                                # noqa: BLE001
-            log.exception("обработчик /%s упал", cmd)
+            log.exception("handler /{} crashed", cmd)
             answer = f"Команда не выполнена: {e}"
         if answer:
             self._reply(chat_id, answer)

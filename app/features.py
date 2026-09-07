@@ -88,7 +88,7 @@ def verify(n: int = 3) -> dict:
     for k in range(n, 0, -1):
         hour = last_full_hour - pd.Timedelta(hours=k)
         ans = model.predict(m1, hour)
-        log.debug("самопроверка %s -> p_up=%.4f", hour, ans["p_up"])
+        log.debug("selfcheck {} -> p_up={:.4f}", hour, ans["p_up"])
     if ans is None:
         raise ValueError("n должно быть положительным")
     return ans

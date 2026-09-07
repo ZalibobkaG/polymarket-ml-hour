@@ -60,7 +60,7 @@ def reload_if_changed() -> bool:
     _last_sha = sha
     _kp._model_cache = None
     if changed:
-        log.info("модель перечитана после переобучения: %s", sha[:12])
+        log.success("model reloaded after retraining: {}", sha[:12])
     return changed
 
 

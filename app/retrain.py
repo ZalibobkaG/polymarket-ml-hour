@@ -100,16 +100,16 @@ def _read_passport() -> dict:
 
 
 def run() -> int:
-    log.info("переобучение: старт")
+    log.info("retraining: start")
     old_meta = _read_passport()
     backup = _backup()
-    log.info("бэкап прежней модели: %s", backup)
+    log.info("backed up previous model: {}", backup)
 
     res = _run("train.retrain", "--replace")
-    log.info("train.retrain --replace (код %d):\n%s", res.returncode,
+    log.debug("train.retrain --replace (code {}):\n{}", res.returncode,
              (res.stdout or "")[-LOG_TAIL:])
     if res.returncode != 0:
-        log.error("переобучение упало, откат к прежней модели:\n%s",
+        log.error("retraining failed, rolling back to the previous model:\n{}",
                   (res.stderr or "")[-LOG_TAIL:])
         _restore(backup)
         notify.error("Переобучение не удалось",
@@ -118,10 +118,10 @@ def run() -> int:
         return 1
 
     check = _run("kit.selfcheck")
-    log.info("kit.selfcheck (код %d):\n%s", check.returncode,
+    log.debug("kit.selfcheck (code {}):\n{}", check.returncode,
              (check.stdout or "")[-LOG_TAIL:])
     if check.returncode != 0:
-        log.error("самопроверка новой модели не прошла — откат")
+        log.error("new model failed selfcheck — rolling back")
         _restore(backup)
         notify.error("Переобучение отклонено",
                      "Новая модель не прошла самопроверку комплекта (допуск "
@@ -143,8 +143,8 @@ def run() -> int:
         f"Граница знаний: {new_meta.get('data_cutoff_utc', '—')}",
     ]
     notify.send("\n".join(lines), silent=True)
-    log.info("переобучение завершено: %s -> %s",
-             old_meta.get("model_id"), new_meta.get("model_id"))
+    log.success("retraining done: {} -> {}",
+               old_meta.get("model_id"), new_meta.get("model_id"))
     return 0
 
 

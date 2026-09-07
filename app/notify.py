@@ -52,7 +52,7 @@ def _mask(text: str) -> str:
 
 def send(text: str, silent: bool = False) -> bool:
     if not enabled():
-        log.debug("telegram не настроен, сообщение не отправлено")
+        log.debug("telegram not configured, message not sent")
         return False
     if config.DRY_RUN:
         # В бумажном режиме это надо видеть, иначе сообщения не отличить от боевых.
@@ -72,16 +72,16 @@ def send(text: str, silent: bool = False) -> bool:
                 pass
             if "chat not found" in desc.lower():
                 # Телеграм не разрешает боту писать первым — диалог начинает человек.
-                log.error("telegram: чат %s не найден. Откройте бота в Telegram "
-                          "и нажмите Start, иначе уведомления работать не будут",
+                log.error("telegram: chat {} not found. Open the bot in Telegram "
+                          "and press Start, otherwise notifications won't work",
                           config.TELEGRAM_CHAT_ID)
             else:
-                log.warning("telegram отказал: %s", _mask(desc))
+                log.warning("telegram declined: {}", _mask(desc))
             return False
         r.raise_for_status()
         return True
     except Exception as e:                                   # noqa: BLE001
-        log.warning("не удалось отправить в telegram: %s", _mask(str(e)))
+        log.warning("failed to send to telegram: {}", _mask(str(e)))
         return False
 
 
@@ -93,13 +93,13 @@ def send_document(data: bytes, filename: str, caption: str = "",
     а не повод ронять поток команд.
     """
     if not enabled():
-        log.debug("telegram не настроен, файл не отправлен")
+        log.debug("telegram not configured, file not sent")
         return False
     if not data:
-        log.warning("нечего отправлять: файл пуст")
+        log.warning("nothing to send: file is empty")
         return False
     if len(data) > _MAX_DOC_BYTES:
-        log.warning("файл %s не отправлен: %.1f МБ больше потолка %.0f МБ",
+        log.warning("file {} not sent: {:.1f} MB over the {:.0f} MB cap",
                     filename, len(data) / 1024 / 1024, _MAX_DOC_BYTES / 1024 / 1024)
         return False
     try:
@@ -114,7 +114,7 @@ def send_document(data: bytes, filename: str, caption: str = "",
         r.raise_for_status()
         return True
     except Exception as e:                                   # noqa: BLE001
-        log.warning("не удалось отправить файл в telegram: %s", _mask(str(e)))
+        log.warning("failed to send file to telegram: {}", _mask(str(e)))
         return False
 
 
