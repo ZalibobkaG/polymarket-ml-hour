@@ -7,8 +7,9 @@
                                биржа наши ордера принимает
     python main.py once        один проход цикла (решение/заполнения/резолвы)
     python main.py run         рабочий режим: бесконечный цикл.
-                               Управление из Telegram: /status /stats /pause
-                               /resume /stop — только с id из TG_ALLOWED_USER_IDS
+                               Управление из Telegram: /menu (кнопки), /status
+                               /stats /log /pause /resume /stop — только с id
+                               из TG_ALLOWED_USER_IDS
     python main.py stats       сводка по накопленным сделкам
     python main.py retrain     переобучить модель на новых данных (см. app/retrain.py);
                                живой бот подхватит её сам, без перезапуска
@@ -141,8 +142,31 @@ def cmd_once() -> int:
 
 
 def _tg_handlers(bot, stop: threading.Event) -> dict:
-    """Команды из Telegram. Каждая возвращает текст ответа автору."""
+    """Команды из Telegram. Каждая возвращает текст ответа автору.
+
+    Возврат — `str` либо `commands.Reply`, если под ответом нужны кнопки.
+    Кнопка несёт ту же строку, что набирается руками, поэтому меню и команды
+    не могут разъехаться: см. docstring `app/commands.py`.
+    """
     from app import runner
+
+    def menu_buttons() -> list[list[tuple[str, str]]]:
+        """Кнопки меню под текущее состояние бота.
+
+        Собираются заново на каждый показ: пауза и работа — это одна кнопка,
+        и подпись у неё должна отвечать тому, что произойдёт по нажатию.
+        """
+        toggle = (("▶️ Продолжить", "/resume") if bot.paused
+                  else ("⏸ Пауза", "/pause"))
+        return [[("📊 Статус", "/status"), ("📈 Итоги 30д", "/stats")],
+                [toggle, ("📄 Лог", "/log")],
+                [("🛑 Остановить", "/stop ask")]]
+
+    def menu(_: str = "") -> commands.Reply:
+        return commands.Reply(
+            "🤖 <b>Управление</b>\n"
+            f"Сейчас: {'на паузе' if bot.paused else 'работает'}",
+            buttons=menu_buttons())
 
     def status(_: str = "") -> str:
         now = dt.datetime.now(dt.timezone.utc)
@@ -181,20 +205,34 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
             lines.append("Открытых позиций нет")
         return "\n".join(lines)
 
-    def stop_cmd(_: str = "") -> str:
+    def stop_cmd(arg: str = "") -> "str | commands.Reply":
+        """Остановка бота. С кнопки — через переспрос, руками — сразу.
+
+        Набранный `/stop` — осознанное действие, а кнопку легко задеть пальцем,
+        поэтому в меню она ведёт на подтверждение (`/stop ask`), а не на выход.
+        """
+        if arg.strip().lower() == "ask":
+            return commands.Reply(
+                "🛑 <b>Остановить бота?</b>\n"
+                "Открытые позиции останутся: рынок резолвится сам, а исход "
+                "допишется в базу при следующем запуске.",
+                buttons=[[("✅ Да, остановить", "/stop yes"),
+                          ("↩️ Отмена", "/menu")]])
         stop.set()
         return ("🛑 Останавливаюсь. Открытые позиции не закрываю: рынок "
                 "резолвится сам, выигрыш гасится автоматически, а исход "
                 "допишется в базу при следующем запуске.")
 
-    def pause(_: str = "") -> str:
+    def pause(_: str = "") -> commands.Reply:
         bot.paused = True
-        return ("⏸ Пауза. Новых ставок не делаю, начатое довожу до резолва. "
-                "Снять — /resume")
+        return commands.Reply(
+            "⏸ Пауза. Новых ставок не делаю, начатое довожу до резолва.",
+            buttons=menu_buttons())
 
-    def resume(_: str = "") -> str:
+    def resume(_: str = "") -> commands.Reply:
         bot.paused = False
-        return "▶️ Продолжаю. Ставки со следующего часа."
+        return commands.Reply("▶️ Продолжаю. Ставки со следующего часа.",
+                              buttons=menu_buttons())
 
     def log_cmd(arg: str = "") -> str:
         """Прислать текущий лог файлом. `/log` — хвост, `/log all` — целиком.
@@ -248,17 +286,31 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                 f"тейкером {month.get('тейкером', 0)}, "
                 f"пропущено {month.get('пропущено', 0)}")
 
-    handlers = {"stop": stop_cmd, "status": status, "pause": pause,
-                "resume": resume, "stats": stats_cmd, "log": log_cmd}
-    handlers["help"] = lambda _="": ("Команды:\n"
-                                     "/status — что происходит сейчас\n"
-                                     "/stats — итоги за 30 дней\n"
-                                     "/log — прислать лог файлом "
-                                     "(/log 500, /log all)\n"
-                                     "/pause — не делать новых ставок\n"
-                                     "/resume — снять паузу\n"
-                                     "/stop — остановить бота")
-    return handlers
+    def help_cmd(_: str = "") -> commands.Reply:
+        return commands.Reply(
+            "<b>Команды</b>\n"
+            "/menu — меню с кнопками\n"
+            "/status — что происходит сейчас\n"
+            "/stats — итоги за 30 дней\n"
+            "/log — прислать лог файлом (/log 500, /log all)\n"
+            "/pause — не делать новых ставок\n"
+            "/resume — снять паузу\n"
+            "/stop — остановить бота\n\n"
+            "Те же команды лежат в меню ☰ рядом с полем ввода.",
+            buttons=menu_buttons())
+
+    # Порядок здесь и есть порядок в меню ☰ Telegram: сверху то, чем пользуешься
+    # каждый день, снизу — остановка.
+    return {
+        "menu": commands.Command(menu, "меню с кнопками"),
+        "status": commands.Command(status, "что происходит сейчас"),
+        "stats": commands.Command(stats_cmd, "итоги за 30 дней"),
+        "log": commands.Command(log_cmd, "прислать лог файлом"),
+        "pause": commands.Command(pause, "не делать новых ставок"),
+        "resume": commands.Command(resume, "снять паузу"),
+        "stop": commands.Command(stop_cmd, "остановить бота"),
+        "help": commands.Command(help_cmd, "список команд"),
+    }
 
 
 def cmd_run() -> int:
