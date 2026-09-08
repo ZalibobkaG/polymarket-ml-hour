@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 from dataclasses import dataclass
 
 import config
@@ -205,12 +206,31 @@ class ClobTrader:
                                          neg_risk=info.neg_risk)
         return self.client.create_order(args, opts)
 
+    #: build_order только читает биржу (tick-size и т.п.) и подписывает локально —
+    #: до post_order ничего не отправлено, поэтому повтор здесь ничем не рискует.
+    #: Так лечится редкий транзиентный сбой сети на GET /tick-size, который
+    #: py_clob_client_v2 сам не ретраит (в отличие от post()).
+    _BUILD_RETRIES = 3
+    _BUILD_RETRY_DELAY = 0.4
+
+    def _build_order_retrying(self, info: MarketInfo, side: str, price: float,
+                              shares: float):
+        for attempt in range(1, self._BUILD_RETRIES + 1):
+            try:
+                return self.build_order(info, side, price, shares)
+            except Exception as e:                                # noqa: BLE001
+                if attempt == self._BUILD_RETRIES:
+                    raise
+                log.warning("build_order attempt {}/{} failed: {} — retrying",
+                           attempt, self._BUILD_RETRIES, e)
+                time.sleep(self._BUILD_RETRY_DELAY)
+
     def place(self, info: MarketInfo, side: str, price: float,
               shares: float, post_only: bool = False) -> OrderResult:
         from py_clob_client_v2.clob_types import OrderType
 
         try:
-            signed = self.build_order(info, side, price, shares)
+            signed = self._build_order_retrying(info, side, price, shares)
             resp = self.client.post_order(signed, OrderType.GTD, post_only)
         except Exception as e:                                # noqa: BLE001
             if post_only and is_post_only_reject(str(e)):

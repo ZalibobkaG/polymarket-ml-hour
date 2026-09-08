@@ -49,6 +49,21 @@ _configured = False
 _MAX_TAIL_BYTES = 16 * 1024 * 1024
 
 
+class _OnlyNetworkErrors(logging.Filter):
+    """Пропускает только строку py_clob_client_v2 про сетевой сбой (`request
+    error: %s`, из `httpx.RequestError`) — там исходное исключение, которое
+    иначе теряется: библиотека заворачивает его в `PolyApiException("Request
+    exception!")` без `raise ... from`, и больше нигде не видно.
+
+    Не пропускает соседнюю строку `request error status=...` (HTTP-ответ с
+    кодом ошибки, например 400 на post-only-отказ) — она частая и неинформативная,
+    её `runner`/`trader` уже логируют осмысленно сами.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.getMessage().startswith("[py_clob_client_v2] request error: ")
+
+
 class _InterceptHandler(logging.Handler):
     """Redirects stdlib `logging` records into loguru, level and all.
 
@@ -92,11 +107,15 @@ def setup(file_level: str | None = None, console_level: str | None = None) -> No
     # libraries dumping every frame/header at DEBUG. py_clob_client_v2 additionally
     # logs its own HTTP errors on every failed request, including ones our code
     # already handles and logs meaningfully (e.g. a post-only reject) — muted
-    # fully to avoid a duplicate, uninformative line for every such request.
+    # down to just the network-failure line (see `_OnlyNetworkErrors`), which is
+    # the one place the real cause behind a generic `PolyApiException("Request
+    # exception!")` still shows up.
     root = logging.getLogger()
     root.handlers = [_InterceptHandler()]
     root.setLevel(logging.WARNING)
-    logging.getLogger("py_clob_client_v2.http_helpers.helpers").setLevel(logging.CRITICAL)
+    clob_helpers = logging.getLogger("py_clob_client_v2.http_helpers.helpers")
+    clob_helpers.setLevel(logging.ERROR)
+    clob_helpers.addFilter(_OnlyNetworkErrors())
 
     _configured = True
 
