@@ -20,6 +20,7 @@ import datetime as dt
 import httpx
 
 import config
+from app import storage
 from app.log import get
 
 log = get("notify")
@@ -187,14 +188,19 @@ def _quote(*lines: str) -> str:
     return f"<blockquote>{body}</blockquote>" if body else ""
 
 
-def _account_line(account: tuple[float, float] | None) -> str:
-    """Portfolio/Cash одной строкой — как в приложении Polymarket. `account` —
-    `(cash, portfolio)` от `ClobTrader.account_value()`; None — не показываем
-    (бумажный режим или не удалось получить)."""
+def _account_table(account: tuple[float, float] | None) -> str:
+    """Portfolio/Cash мини-таблицей — моноширинным <pre>, Telegram не умеет в
+    настоящие HTML-таблицы. `account` — `(cash, portfolio)` от
+    `ClobTrader.account_value()`; None — не показываем (бумажный режим или не
+    удалось получить)."""
     if account is None:
         return ""
     cash, portfolio = account
-    return f"💰 Портфель {portfolio:.2f}$ / Кэш {cash:.2f}$"
+    rows = [("Портфель", f"{portfolio:.2f}$"), ("Кэш", f"{cash:.2f}$")]
+    label_w = max(len(label) for label, _ in rows)
+    value_w = max(len(value) for _, value in rows)
+    lines = [f"{label.ljust(label_w)}  {value.rjust(value_w)}" for label, value in rows]
+    return "<pre>" + "\n".join(lines) + "</pre>"
 
 
 # ----------------------------------------------------------------------
@@ -207,18 +213,17 @@ def order_placed(hour_start: dt.datetime, side: str, price: float, shares: float
                  tries: int = 1, account: tuple[float, float] | None = None) -> None:
     q = proba_up if side == "Up" else 1 - proba_up
     how = "тейкером — цена окупает комиссию" if cross else "пассивно (post-only)"
+    meta = f"{_hour(hour_start)} · {how}"
+    if tries > 1:
+        meta += f" · встали с {tries}-й попытки"
     book_line = (f"Стакан по {side}: {_cents(bid) if bid else '—'} / "
                 f"{_cents(ask) if ask else '—'}") if bid is not None or ask is not None else ""
-    tries_line = f"Встали с {tries}-й попытки" if tries > 1 else ""
-    parts = [
-        f"📌 <b>Ордер: {side} × {shares:g} по {_cents(price)}</b>",
-        _quote(_hour(hour_start), f"Способ: {how}", tries_line),
-        _quote(f"Модель даёт {q * 100:.1f}% на {side}, безубыток "
-              f"{price * 100:.1f}% → запас {(q - price) * 100:+.1f} п.п.",
-              f"EV {ev:+.3f}$, в риске {shares * price:.2f}$", book_line),
-        _quote(_account_line(account)),
-    ]
-    send("\n".join(p for p in parts if p), silent=True)
+    header = f"📌 <b>Ордер: {side} × {shares:g} по {_cents(price)}</b>\n{meta}"
+    details = _quote(f"Модель даёт {q * 100:.1f}% на {side}, безубыток "
+                     f"{price * 100:.1f}% → запас {(q - price) * 100:+.1f} п.п.",
+                     f"EV {ev:+.3f}$, в риске {shares * price:.2f}$", book_line)
+    sections = [header, details, _account_table(account)]
+    send("\n\n".join(s for s in sections if s), silent=True)
 
 
 _ROLE_NAMES = {"TAKER": "Тейкером", "MIXED": "Частями"}
@@ -234,15 +239,13 @@ def filled(hour_start: dt.datetime, side: str, price: float, shares: float,
         role_line = f"{_ROLE_NAMES.get(role, role)} — комиссия {fee:.3f}$"
     else:
         role_line = ""
-    parts = [
-        f"✅ <b>Исполнен: {side} × {shares:g} по {_cents(price)}</b>",
-        _quote(_hour(hour_start), role_line),
-        _quote(f"Всего {price * shares + fee:.2f}$ = {_cents(eff)} за шейр "
-              f"(так и покажет Polymarket)",
-              f"Отбивается при {eff * 100:.1f}% угаданных"),
-        _quote(_account_line(account)),
-    ]
-    send("\n".join(p for p in parts if p))
+    meta = f"{_hour(hour_start)}" + (f" · {role_line}" if role_line else "")
+    header = f"✅ <b>Исполнен: {side} × {shares:g} по {_cents(price)}</b>\n{meta}"
+    details = _quote(f"Всего {price * shares + fee:.2f}$ = {_cents(eff)} за шейр "
+                     f"(так и покажет Polymarket)",
+                     f"Отбивается при {eff * 100:.1f}% угаданных")
+    sections = [header, details, _account_table(account)]
+    send("\n\n".join(s for s in sections if s))
 
 
 def resolved(hour_start: dt.datetime, side: str, outcome: str, won: bool,
@@ -250,17 +253,16 @@ def resolved(hour_start: dt.datetime, side: str, outcome: str, won: bool,
              total: dict | None = None,
              account: tuple[float, float] | None = None) -> None:
     head = "🟢 <b>Победа</b>" if won else "🔴 <b>Проигрыш</b>"
+    meta = _hour(hour_start)
+    if price is not None:
+        meta += f" · ставили {side} × {shares:g} по {_cents(price)}"
     total_line = (f"Всего {total['P&L, $']:+.2f}$ "
                  f"({total['угадано']}/{total['ставок']}, "
                  f"{total['точность, %']:.1f}%)") if total else ""
-    parts = [
-        f"{head} · итог {outcome}",
-        _quote(_hour(hour_start),
-              f"Ставили {side} × {shares:g} по {_cents(price)}" if price is not None else ""),
-        _quote(f"Результат <b>{pnl:+.2f}$</b>", total_line),
-        _quote(_account_line(account)),
-    ]
-    send("\n".join(p for p in parts if p), silent=True)
+    header = f"{head} · итог {outcome}\n{meta}"
+    details = _quote(f"Результат <b>{pnl:+.2f}$</b>", total_line)
+    sections = [header, details, _account_table(account)]
+    send("\n\n".join(s for s in sections if s), silent=True)
 
 
 def skipped(hour_start: dt.datetime, reason: str) -> None:
@@ -295,8 +297,10 @@ def startup(problems: list[str]) -> None:
     if problems:
         send("🚫 <b>Бот не стартовал</b>\n" + "\n".join(f"• {p}" for p in problems))
         return
-    body = [f"Ставка {config.SHARES:g} шейров по {_cents(config.LIMIT_PRICE)} "
-           f"— {config.SHARES * config.LIMIT_PRICE:.2f}$ в час",
+    with storage.session() as s:
+        shares = storage.current_shares(s)
+    body = [f"Ставка {shares:g} шейров по {_cents(config.LIMIT_PRICE)} "
+           f"— {shares * config.LIMIT_PRICE:.2f}$ в час",
            f"Решение за {config.EARLY_SECONDS // 60} мин до часа"]
     if config.POST_ONLY:
         body.append("Ставим пассивно, при отказе пробуем снова до начала часа; "

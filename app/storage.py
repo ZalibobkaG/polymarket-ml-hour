@@ -117,6 +117,23 @@ class Event(Base):
     message = Column(Text)
 
 
+class ShareChange(Base):
+    """Лента изменений размера ставки (`/shares` в Telegram).
+
+    Одна таблица закрывает две задачи: «сколько шейров ставим сейчас» — это
+    просто последняя строка, и аудит-лог для вертикальных линий на equity
+    curve — отдельного хранилища для «текущего значения» не нужно.
+    """
+
+    __tablename__ = "share_changes"
+
+    id = Column(Integer, primary_key=True)
+    changed_at = Column(DateTime(timezone=True), nullable=False, index=True,
+                        server_default=func.now())
+    old_shares = Column(Float, nullable=False)
+    new_shares = Column(Float, nullable=False)
+
+
 _engine = None
 _Session: sessionmaker | None = None
 
@@ -218,6 +235,29 @@ def add_quote(s: Session, hour_start: dt.datetime, tag: str, book: dict) -> None
 def log_event(level: str, kind: str, message: str) -> None:
     with session() as s:
         s.add(Event(level=level, kind=kind, message=message))
+
+
+def current_shares(s: Session) -> float:
+    """Сколько шейров ставим прямо сейчас — последнее изменение, а если его ещё
+    не было (свежая база), дефолт из `config.py`."""
+    row = s.scalar(select(ShareChange).order_by(ShareChange.changed_at.desc()).limit(1))
+    return row.new_shares if row else float(config.SHARES)
+
+
+def set_shares(s: Session, new_shares: float) -> ShareChange | None:
+    """Записать изменение размера ставки. `None`, если значение не поменялось."""
+    old = current_shares(s)
+    if abs(old - new_shares) < 1e-9:
+        return None
+    change = ShareChange(old_shares=old, new_shares=new_shares)
+    s.add(change)
+    s.flush()
+    return change
+
+
+def share_changes(s: Session) -> list[ShareChange]:
+    """Вся лента изменений по порядку времени — для вертикальных линий на графике."""
+    return list(s.scalars(select(ShareChange).order_by(ShareChange.changed_at)))
 
 
 def pnl_since(s: Session, since: dt.datetime) -> float:

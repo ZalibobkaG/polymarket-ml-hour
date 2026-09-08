@@ -28,9 +28,18 @@ from app import storage
 warnings.filterwarnings("ignore", message="AutoDateLocator was unable to pick.*",
                         category=UserWarning)
 
-_FIGSIZE = (8, 4.5)
-_DPI = 150
-_GREEN, _RED, _BLUE, _GREY = "#2e7d32", "#c62828", "#1565c0", "#9e9e9e"
+# Тёмная тема на весь модуль — эти графики только и делают, что открываются
+# картинкой в Telegram, конкурировать за rcParams с чем-то ещё в процессе не с чем.
+plt.style.use("dark_background")
+
+# Крупнее, чем дефолт: график открывают на весь экран телефона — мелкий текст
+# и тонкие линии на таком масштабе становятся кашей.
+_FIGSIZE = (11, 6.5)
+_DPI = 170
+# На чёрном фоне тёмно-зелёный/тёмно-красный/тёмно-синий из светлой темы гаснут —
+# те же цвета, но на тон-два ярче.
+_GREEN, _RED, _BLUE, _GREY, _AMBER = (
+    "#66bb6a", "#ef5350", "#42a5f5", "#9e9e9e", "#ffb300")
 
 
 def _finish(fig) -> bytes:
@@ -50,13 +59,20 @@ def _dated_axes(ax) -> None:
 
 
 def equity_curve() -> bytes | None:
-    """Кумулятивный P&L по резолвнутым ставкам (только заполненные), во времени."""
+    """Кумулятивный P&L по резолвнутым ставкам (только заполненные), во времени.
+
+    Изменения размера ставки (`/shares`) отмечаются вертикальной пунктирной
+    линией с подписью в легенде — без этого скачок наклона equity curve легко
+    принять за смену везения, а не размера позиции.
+    """
     with storage.session() as s:
         rows = [(storage.as_utc(m.hour_start), m.pnl_usd or 0.0)
                 for m in s.query(storage.Market)
                 .filter(storage.Market.status == storage.RESOLVED,
                         storage.Market.filled_shares > 0)
                 .order_by(storage.Market.hour_start)]
+        changes = [(storage.as_utc(c.changed_at), c.old_shares, c.new_shares)
+                   for c in storage.share_changes(s)]
     if not rows:
         return None
 
@@ -69,6 +85,12 @@ def equity_curve() -> bytes | None:
     fig, ax = plt.subplots(figsize=_FIGSIZE)
     ax.plot(times, cum, color=_GREEN if cum[-1] >= 0 else _RED, linewidth=2)
     ax.axhline(0, color=_GREY, linewidth=0.8, linestyle="--")
+    for changed_at, old, new in changes:
+        if times[0] <= changed_at <= times[-1]:
+            ax.axvline(changed_at, color=_AMBER, linewidth=1.3, linestyle=":",
+                      label=f"{old:g}→{new:g} shares ({changed_at:%d.%m})")
+    if any(times[0] <= c[0] <= times[-1] for c in changes):
+        ax.legend(fontsize=9)
     ax.set_title("Equity curve")
     ax.set_ylabel("Кумулятивный P&L, $")
     _dated_axes(ax)

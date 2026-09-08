@@ -205,7 +205,10 @@ class Bot:
         # «пассивно или тейкером» зависит от предложения именно по нашему токену.
         side = "Up" if proba >= 0.5 else "Down"
         side_book = markets.book(info.token(side))
-        d = pricing.decide(proba, tick=info.tick_size, best_ask=side_book.get("ask"))
+        with storage.session() as s:
+            shares = storage.current_shares(s)
+        d = pricing.decide(proba, tick=info.tick_size, best_ask=side_book.get("ask"),
+                           shares=shares)
         log.info("{} | {} | {}", hour_start, info.slug, pricing.describe(d))
 
         book = markets.snapshot(info)

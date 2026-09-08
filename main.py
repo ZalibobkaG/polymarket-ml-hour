@@ -234,6 +234,33 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         return commands.Reply("▶️ Продолжаю. Ставки со следующего часа.",
                               buttons=menu_buttons())
 
+    def shares_cmd(arg: str = "") -> str:
+        """Изменить размер ставки на лету. `/shares` — показать текущий.
+
+        Действует со следующего решения — открытые позиции не трогает (у них
+        размер уже зафиксирован в своей строке `Market`). Пишется в БД
+        (`storage.ShareChange`), поэтому переживает рестарт бота и остаётся
+        вертикальной линией на графике `/stats equity`.
+        """
+        arg = (arg or "").strip()
+        with storage.session() as s:
+            current = storage.current_shares(s)
+        if not arg:
+            return f"Сейчас ставка {current:g} шейров.\nИзменить: /shares 15"
+        try:
+            new = float(arg)
+        except ValueError:
+            return "Не понял число. Пример: /shares 15"
+        if new < 5:                     # orderMinSize у часовых рынков — меньше нельзя
+            return "Меньше 5 нельзя — минимум ордера на бирже (orderMinSize)."
+        with storage.session() as s:
+            change = storage.set_shares(s, new)
+        if change is None:
+            return f"Уже стоит {current:g} — менять нечего."
+        return (f"✅ Ставка изменена: {change.old_shares:g} → {change.new_shares:g} "
+               f"шейров.\nПрименится со следующего решения, открытые позиции "
+               f"не трогает.")
+
     def log_cmd(arg: str = "") -> str:
         """Прислать текущий лог файлом. `/log` — хвост, `/log all` — целиком.
 
@@ -350,6 +377,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
             "/stats — статистика: 30 дней, графики (equity, уверенность модели, "
             "угадывания) и разбор, как они считаются\n"
             "/log — прислать лог файлом (/log 500, /log all)\n"
+            "/shares — изменить размер ставки (/shares 15)\n"
             "/pause — не делать новых ставок\n"
             "/resume — снять паузу\n"
             "/stop — остановить бота\n\n"
@@ -363,6 +391,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         "status": commands.Command(status, "что происходит сейчас"),
         "stats": commands.Command(stats_cmd, "статистика: 30д, графики"),
         "log": commands.Command(log_cmd, "прислать лог файлом"),
+        "shares": commands.Command(shares_cmd, "изменить размер ставки"),
         "pause": commands.Command(pause, "не делать новых ставок"),
         "resume": commands.Command(resume, "снять паузу"),
         "stop": commands.Command(stop_cmd, "остановить бота"),
