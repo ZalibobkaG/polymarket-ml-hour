@@ -1,0 +1,23 @@
+{
+  "kit": "poly_hourly_kit_eth",
+  "kit_version": "1.0",
+  "model_id": "0c00b88058b1",
+  "features_sha256": "685ed4d6fd468f494fd3a13e7325a78a00f57eaa3f51cbff4ee3ad1b3ccbc951",
+  "fixtures": {
+    "minutes_csv_gz_sha256": "84da5860620d08cb3cd1f035050611e05b28775ab39fd342a50a4c1f85285159",
+    "reference_csv_sha256": "701b4434905c4dcf91f78db8ffab9a57988644c6c9976e53f803f4d94fa0e617",
+    "rows": 200,
+    "minute_rows": 32098,
+    "warmup_hours": 336,
+    "first_hour_utc": "2026-08-29T15:00:00+00:00",
+    "last_hour_utc": "2026-09-06T22:00:00+00:00",
+    "generated_at_utc": "2026-09-07T15:05:18+00:00"
+  },
+  "environment": {
+    "python": "3.13.2",
+    "lightgbm": "4.5.0",
+    "numpy": "2.2.6",
+    "pandas": "2.2.3"
+  },
+  "note": "Паспорт комплекта. features_sha256 — контрольная сумма побитовой копии файла признаков; при импорте она сверяется, и при расхождении расчёт останавливается. Она СОВПАДАЕТ с комплектом BTC: код признаков у обеих монет один и тот же файл. Контрольная сумма самой модели лежит в model/poly_hourly_eth.json."
+}

@@ -1,12 +1,14 @@
 """Поиск часового рынка и чтение стакана.
 
-Рынок находится по слагу, который строится из времени: часовой рынок
-`bitcoin-up-or-down-july-29-2026-11am-et` — это свеча, начинающаяся в 11:00 ET
-(15:00 UTC летом) и заканчивающаяся в 16:00 UTC.
+Рынок находится по слагу, который строится из времени и монеты: часовой рынок
+`bitcoin-up-or-down-july-29-2026-11am-et` (у ETH — `ethereum-up-or-down-…`) —
+это свеча, начинающаяся в 11:00 ET (15:00 UTC летом) и заканчивающаяся в 16:00 UTC.
+Префикс слага и пара берутся из `config.COIN`; структура слага, формула резолва
+и набор исходов у обеих монет одинаковые.
 
 Валидация обязательна перед каждым ордером. Polymarket уже переводил часть рынков
-BTC Up/Down на Chainlink (семейство `btc-updown-5m/15m/4h`), а модель обучена
-на Binance BTC/USDT — торговать «похожим» рынком нельзя. Поэтому проверяется
+Up/Down на Chainlink (семейство `btc-updown-5m/15m/4h`), а модель обучена
+на свече Binance — торговать «похожим» рынком нельзя. Поэтому проверяется
 источник резолва, формула, исходы и то, что endDate совпадает с ожидаемым часом.
 """
 
@@ -31,7 +33,9 @@ _RETRIES = 3
 #: Признаки правильного рынка. Меняются вместе с правилами Polymarket — если
 #: валидация начнёт падать на всех рынках, сначала смотреть сюда, а не отключать её.
 REQUIRED_SOURCE = "binance.com"
-REQUIRED_PAIR = "BTC/USDT"
+#: Пара, которая обязана быть в описании рынка. Единственный признак, зависящий
+#: от монеты: "BTC/USDT" или "ETH/USDT".
+REQUIRED_PAIR = config.PAIR
 REQUIRED_FORMULA = "greater than or equal to the open price"
 EXPECTED_OUTCOMES = ["Up", "Down"]
 
@@ -62,12 +66,15 @@ class MarketInfo:
 
 
 def slug_for(hour_start: pd.Timestamp) -> str:
-    """Слаг рынка для часа, начинающегося в `hour_start` (UTC)."""
+    """Слаг рынка для часа, начинающегося в `hour_start` (UTC).
+
+    Префикс задаётся монетой (`config.SLUG_PREFIX`), остальное — время в ET.
+    """
     et = pd.Timestamp(hour_start).tz_convert(_ET)
     hour12 = et.hour % 12 or 12
     suffix = "am" if et.hour < 12 else "pm"
     month = et.strftime("%B").lower()
-    return (f"bitcoin-up-or-down-{month}-{et.day}-{et.year}-{hour12}{suffix}-et")
+    return (f"{config.SLUG_PREFIX}-{month}-{et.day}-{et.year}-{hour12}{suffix}-et")
 
 
 def _get(url: str, params: dict | None = None) -> list | dict:
@@ -153,7 +160,7 @@ def book(token_id: str) -> dict:
 
 #: Когда правило резолва проверялось в последний раз. Проверка не нужна перед каждым
 #: ордером — правила рынка меняются раз в месяцы, а не раз в час. Но совсем без неё
-#: нельзя: Polymarket уже переводил семейство BTC Up/Down (5m/15m/4h) на Chainlink,
+#: нельзя: Polymarket уже переводил семейство Up/Down (5m/15m/4h) на Chainlink,
 #: и модель, обученная на Binance, торговала бы не тот рынок.
 _validated_at: pd.Timestamp | None = None
 VALIDATE_EVERY = pd.Timedelta(hours=24)
@@ -171,8 +178,8 @@ def ensure_valid(hour_start: pd.Timestamp, force: bool = False) -> None:
     raw = fetch(pd.Timestamp(hour_start))
     validate(raw, pd.Timestamp(hour_start))
     _validated_at = now
-    log.info("resolution rule verified on {} — Binance BTC/USDT, close >= open",
-             raw.get("slug"))
+    log.info("resolution rule verified on {} — Binance {}, close >= open",
+             raw.get("slug"), config.PAIR)
 
 
 def find(hour_start: pd.Timestamp, with_book: bool = True) -> MarketInfo:
@@ -253,7 +260,7 @@ def outcome_from_binance(hour_start: pd.Timestamp) -> str | None:
     end = hour_start + pd.Timedelta(hours=1)
     if pd.Timestamp.now(tz="UTC") < end:
         return None
-    m1 = bd.load_1m(start=hour_start - pd.Timedelta(minutes=5),
+    m1 = bd.load_1m(start=hour_start - pd.Timedelta(minutes=5), symbol=config.SYMBOL,
                     cache_dir=config.CACHE_DIR, verbose=False)
     candle = m1[(m1.index >= hour_start) & (m1.index < end)]
     if candle.empty or candle.index[-1] < end - pd.Timedelta(minutes=1):

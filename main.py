@@ -17,7 +17,10 @@
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
 
-Модель — комплект `poly_hourly_kit/` от напарника, уже обучена и лежит в репозитории
+Монета выбирается в `config.py` строкой `COIN` ("btc" или "eth") — от неё зависят
+пара Binance, слаг рынка и комплект с моделью.
+
+Модель — комплект под выбранную монету (`config.KIT_DIR`), уже обучена и лежит в репозитории
 готовым файлом. Раз в интервал обучения её стоит обновлять командой `retrain` —
 удобнее всего через cron раз в месяц, см. docstring `app/retrain.py`.
 """
@@ -50,7 +53,7 @@ def cmd_check(live_order: bool = False) -> int:
     print(f"режим: {'БУМАГА (ордера не отправляются)' if config.DRY_RUN else 'БОЙ'}")
     problems = risk.preflight()
 
-    print("\nсамопроверка модели (живые минутки → poly_hourly_kit)…")
+    print(f"\nсамопроверка модели (живые минутки {config.SYMBOL} → {config.KIT_DIR.name})…")
     try:
         ans = features.verify(n=3)
         print(f"  ок: p_up={ans['p_up']:.4f} на час {ans['feature_hour_utc']}, "

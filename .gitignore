@@ -22,13 +22,21 @@ reports/
 # план до реализации, его заменил README
 PLAN.md
 
-# --- модель (poly_hourly_kit/) ----------------------------------------------
+# --- модели (poly_hourly_kit*/) ---------------------------------------------
+# По комплекту на монету: poly_hourly_kit/ — BTC, poly_hourly_kit_eth/ — ETH.
+# Какой из них берётся, решает COIN в config.py; в репозитории лежат оба, чтобы
+# одно и то же развёртывание годилось под любую монету.
+#
 # kit/, model/, fixtures/, train/, passport.json — трекаются целиком, это и есть
-# боевая модель (см. poly_hourly_kit/README.md). Не трекаются только тяжёлые и
+# боевая модель (см. README.md внутри комплекта). Не трекаются только тяжёлые и
 # генерируемые вещи: кэш минуток для переобучения и черновики/бэкапы замены.
+# Без этих строк первый же `main.py retrain` утащит в репозиторий ~180 МБ parquet.
 poly_hourly_kit/data/
 poly_hourly_kit/model_new/
 poly_hourly_kit/model_backup/
+poly_hourly_kit_eth/data/
+poly_hourly_kit_eth/model_new/
+poly_hourly_kit_eth/model_backup/
 
 # --- мусор -----------------------------------------------------------------
 __pycache__/

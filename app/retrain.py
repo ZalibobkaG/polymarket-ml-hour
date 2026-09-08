@@ -1,10 +1,10 @@
-"""Периодическое переобучение модели `poly_hourly_kit` на новых данных.
+"""Периодическое переобучение модели комплекта на новых данных.
 
     python main.py retrain
 
 Модель нужно обновлять раз в интервал обучения, иначе её граница знаний
 (`data_cutoff_utc` в паспорте) стареет, а сигнал, по измерениям самого
-комплекта, и так слабеет год от года (см. `poly_hourly_kit/README.md` §6).
+комплекта, и так слабеет год от года (см. `README.md` §6 в комплекте).
 Комплект обучен на скользящем окне 1460 дней с шагом 30 — раз в месяц вполне
 соответствует этой схеме; чаще — просто лишняя закачка минуток без выгоды.
 
@@ -13,7 +13,9 @@
 1.  Бэкапит текущие `model/*.{txt,json}` и `fixtures/*` — на случай отката.
 2.  Запускает `python -m train.retrain --replace` внутри комплекта: это его
     родная команда (walk-forward → обучение боевой модели → замена файлов →
-    пересборка фикстур), см. `poly_hourly_kit/train/retrain.py`.
+    пересборка фикстур), см. `train/retrain.py` в комплекте. Кэш минуток
+    указывается наш (`config.CACHE_DIR`), чтобы комплект не качал те же 180 МБ
+    второй раз в свой собственный каталог.
 3.  Прогоняет `python -m kit.selfcheck` — комплект сверяет новую модель сам
     с собой на пересобранном эталоне. Не прошла — откат к бэкапу.
 4.  Шлёт итог в Telegram: было/стало по ключевым метрикам, либо причину отказа.
@@ -40,13 +42,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+import config
 from app import notify
 from app.log import get
 
 log = get("retrain")
 
 ROOT = Path(__file__).resolve().parents[1]
-KIT_DIR = ROOT / "poly_hourly_kit"
+#: Комплект той монеты, которую торгует этот процесс (`config.COIN`).
+KIT_DIR = config.KIT_DIR
 MODEL_DIR = KIT_DIR / "model"
 FIXTURES_DIR = KIT_DIR / "fixtures"
 BACKUP_ROOT = KIT_DIR / "model_backup"
@@ -105,7 +109,7 @@ def run() -> int:
     backup = _backup()
     log.info("backed up previous model: {}", backup)
 
-    res = _run("train.retrain", "--replace")
+    res = _run("train.retrain", "--replace", "--cache-dir", str(config.CACHE_DIR))
     log.debug("train.retrain --replace (code {}):\n{}", res.returncode,
              (res.stdout or "")[-LOG_TAIL:])
     if res.returncode != 0:

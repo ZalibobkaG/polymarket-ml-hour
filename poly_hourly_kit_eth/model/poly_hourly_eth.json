@@ -1,0 +1,205 @@
+{
+  "model_id": "0c00b88058b1",
+  "sha256": "0c00b88058b19539d08ead14075f579d1e3ab543c321dd0f651f5ff020c1f93b",
+  "symbol": "ETHUSDT",
+  "timeframe": "1h",
+  "bar_minutes": 60,
+  "market": "Polymarket, ETH Up or Down (часовой)",
+  "target_rule": "close >= open полной часовой свечи Binance ETHUSDT; равенство = Up",
+  "feature_cutoff_minutes": 2,
+  "feature_source": "часовая свеча H-1 из минуток (H-1):00 .. (H-1):57",
+  "decision_time": "H - 2 минуты",
+  "trained_at_utc": "2026-09-07T14:24:31+00:00",
+  "data_end_frozen_utc": "2026-09-07 00:00",
+  "data_end_utc": "2026-09-07T00:00:00+00:00",
+  "eval_bars": 26280,
+  "folds": 37,
+  "data_cutoff_utc": "2026-09-06T21:00:00+00:00",
+  "train_start_utc": "2022-09-07T21:00:00+00:00",
+  "train_rows": 35037,
+  "train_days": 1460,
+  "features": [
+    "r1",
+    "r2",
+    "r3",
+    "r6",
+    "r12",
+    "r24",
+    "r48",
+    "z24",
+    "z168",
+    "vol_ratio",
+    "atr_rel",
+    "bodyn",
+    "lower",
+    "upper",
+    "volrel",
+    "trrel",
+    "rsi",
+    "streak_signed",
+    "hsin",
+    "hcos",
+    "dsin",
+    "dcos"
+  ],
+  "params": {
+    "n_estimators": 250,
+    "learning_rate": 0.03,
+    "num_leaves": 7,
+    "max_depth": 3,
+    "min_child_samples": 250,
+    "subsample": 0.8,
+    "subsample_freq": 1,
+    "colsample_bytree": 0.7,
+    "reg_lambda": 5.0,
+    "verbose": -1,
+    "random_state": 42
+  },
+  "threshold": 0.58,
+  "phase_coverage": {
+    "медвежья": 0.5644318862916345,
+    "боковик": 0.11987327682164568,
+    "бычья": 0.31569483688671973
+  },
+  "recipe": {
+    "origin": "рецепт BTC, применён без единого изменения",
+    "features_sha256": "685ed4d6fd468f494fd3a13e7325a78a00f57eaa3f51cbff4ee3ad1b3ccbc951",
+    "files": {
+      "src/features.py": "685ed4d6fd468f494fd3a13e7325a78a00f57eaa3f51cbff4ee3ad1b3ccbc951",
+      "src/validation.py": "55ae142b1e131e81dbab5b2bfa2f59aee20f9603796a4eec3c1bab714664e700",
+      "src/phases.py": "5f0b52088289883af0453aa2c7bf57abf73d4dc18e0370fd4ca73d3ff46646cf",
+      "src/poly_data.py": "e07b4233f468321a8f517b93dc080c0af9d2588e0f3d90a7a93d1b526df815b0",
+      "src/stats.py": "432b5f1f75e0ff076364ef7f1152b2d685572156fbee1830ee9cd46df1db7bf6",
+      "scripts/walkforward_tf.py": "f6dc2b0f8b9573ad86399d6ecca52bb0c8feb29a7771b1fd2af574575d553a8e"
+    },
+    "reference_report": "reports/poly_hourly_walkforward.md"
+  },
+  "data_passport": {
+    "minutes": 3732291,
+    "hours_trunc": 62212,
+    "hours_full": 62213,
+    "rows_built": 62212,
+    "usable": 62022,
+    "drop_categories": {
+      "в работе": 62022,
+      "признаки не готовы (разгон 168 баров или NaN)": 171,
+      "нет цели: следующая полная свеча не закрыта": 15,
+      "нулевой объём (правило A)": 3,
+      "следующий бар не ровно через час (дыра)": 1
+    },
+    "zero_volume_hours": [
+      "2020-12-21T14:00:00+00:00",
+      "2021-02-11T03:00:00+00:00",
+      "2023-03-24T12:00:00+00:00"
+    ],
+    "first_bar": "2019-08-08T00:00:00+00:00"
+  },
+  "zero_volume_rule": "A: час выброшен, если суммарный объём равен нулю в обрезанной или в полной свече",
+  "walkforward": {
+    "eval_start": "2023-09-07T00:00:00+00:00",
+    "eval_end": "2026-09-06T00:00:00+00:00",
+    "bars": 26280,
+    "folds": 37,
+    "folds_built": 37,
+    "folds_dropped_short_window": 0,
+    "history_missing_days": 0.0,
+    "best_rule": "против предыдущего",
+    "best_rule_pct": 52.64079147640791,
+    "model_pct": 54.04490106544901,
+    "model_wilson": [
+      53.44182231452722,
+      54.64679746858493
+    ],
+    "gap_pp": 1.4041095890411026,
+    "mcnemar_p": 1.3355911370903353e-05,
+    "balanced_accuracy": 53.99975370730721,
+    "roc_auc": 0.552448175492569,
+    "log_loss": 0.689162834080998,
+    "brier": 0.24800972138737232,
+    "edge_bp": 0.5300958111819406,
+    "edge_bp_ci": 0.8257444786332894,
+    "calibration_slope": 0.806399649931566,
+    "windows_above_50": "36/37"
+  },
+  "market_economics": {
+    "price": 0.5,
+    "shares": 5,
+    "fee_rate": 0.07,
+    "price_tick": 0.01,
+    "min_shares": 5,
+    "fee_per_bet_usd": 0.08750000000000001,
+    "breakeven_maker_pct": 50.0,
+    "breakeven_taker_pct": 51.74999999999999,
+    "ev_per_bet_usd": 0.20224505327245054,
+    "ev_per_bet_ci_usd": 0.03012769277615156,
+    "ev_total_usd": 5315.0,
+    "ev_total_taker_usd": 3015.5
+  },
+  "honesty_checks": [
+    {
+      "name": "сходимость данных в периоде оценки",
+      "ok": true,
+      "text": "0.00e+00 на 26 280 часах"
+    },
+    {
+      "name": "целостность нарезки",
+      "ok": true,
+      "text": "пересечений 0, окон внахлёст 0, зазор 7 д, один раз 26 280 из 26 280, дважды 0"
+    },
+    {
+      "name": "максимальная связь признака с будущим",
+      "ok": true,
+      "text": "0.0192 (lower), порог 0.15"
+    },
+    {
+      "name": "два прогона одного фолда совпадают бит в бит",
+      "ok": true,
+      "text": "0.00e+00 (фолд 19, 720 баров)"
+    },
+    {
+      "name": "живой расчёт признаков против пакетного",
+      "ok": true,
+      "text": "0.00e+00 на 8 часах"
+    },
+    {
+      "name": "обрезание истории на 2025-01-01",
+      "ok": true,
+      "text": "0.00e+00 на 47 477 строках"
+    }
+  ],
+  "sabotage_checks": [
+    {
+      "name": "сходимость данных в периоде оценки",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    },
+    {
+      "name": "целостность нарезки",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    },
+    {
+      "name": "максимальная связь признака с будущим",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    },
+    {
+      "name": "два прогона одного фолда совпадают бит в бит",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    },
+    {
+      "name": "живой расчёт признаков против пакетного",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    },
+    {
+      "name": "обрезание истории на 2025-01-01",
+      "fell_when_broken": true,
+      "green_after_restore": true
+    }
+  ],
+  "edge_proven": true,
+  "verdict": "Модель бьёт лучшее простое правило значимо: 54.0449% против 52.6408% (против предыдущего), разрыв +1.4041 п.п., McNemar p = 1.33559e-05.",
+  "note": "Обучена в research/poly_hourly_ethsol по замороженному рецепту BTC без единого изменения признаков, схемы, гиперпараметров и порога. В src/registry.py и в дашборд не входит. Порог из внутренней валидации; на рынок он механически не переносится."
+}
