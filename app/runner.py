@@ -302,8 +302,11 @@ class Bot:
                 try:
                     info = markets.find(hs, with_book=False)
                     book = markets.book(info.token(side))
+                    # shares — уже зафиксированный при первом решении размер этого
+                    # рынка (из его же строки в БД), а не текущий /shares: если
+                    # ставку поменяли посреди часа, начатая ставка размер не меняет.
                     d = pricing.decide(proba, tick=info.tick_size,
-                                       best_ask=book.get("ask"))
+                                       best_ask=book.get("ask"), shares=shares)
                     if not d.bet:
                         break
                     res = self.trader.place(info, d.side, d.price, d.shares,
@@ -370,7 +373,11 @@ class Bot:
             except Exception as e:                            # noqa: BLE001
                 log.warning("book read failed on attempt {}: {}", tries, e)
                 continue
-            fresh = pricing.decide(d.proba_up, tick=info.tick_size, best_ask=ask)
+            # shares берём из уже принятого решения d, а не заново из /shares —
+            # серия попыток внутри одного захода на один и тот же рынок должна
+            # оставаться с тем размером, с которым начиналась.
+            fresh = pricing.decide(d.proba_up, tick=info.tick_size, best_ask=ask,
+                                   shares=d.shares)
             if fresh.bet:
                 if fresh.cross and not d.cross:
                     log.info("{}: ask {:.2f} covers the fee — going taker",

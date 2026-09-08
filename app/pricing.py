@@ -71,12 +71,18 @@ def round_to_tick(price: float, tick: float) -> float:
 
 
 def decide(proba_up: float, tick: float = 0.01,
-           best_ask: float | None = None) -> Decision:
+           best_ask: float | None = None,
+           shares: float = config.SHARES) -> Decision:
     """Что делать при данном прогнозе.
 
     Сторону выбираем по прогнозу, цену — фиксированную из конфига (LIMIT_PRICE).
     Фиксированная цена, а не подстройка под стакан, выбрана намеренно: весь расчёт
     доходности в отчёте сделан именно для неё.
+
+    `shares` — размер ставки; по умолчанию `config.SHARES`, но вызывающий код
+    почти всегда передаёт его явно (`storage.current_shares()` в момент решения,
+    либо уже зафиксированный размер этого рынка при повторных попытках) — сам
+    дефолт вычисляется один раз при импорте модуля и не подхватит `/shares`.
 
     Отдельно решается, пересекать ли стакан. `best_ask` — лучшее предложение по
     выбранной стороне. Если оно не ниже нашей цены, ставим пассивно и комиссию не
@@ -91,7 +97,7 @@ def decide(proba_up: float, tick: float = 0.01,
         return Decision(None, price, 0, proba_up, 0.0,
                         f"цена {price:.2f} выше потолка {config.MAX_ENTRY_PRICE:.2f}")
 
-    ev = expected_value(proba_up, price, side)
+    ev = expected_value(proba_up, price, side, shares=shares)
     if ev <= 0:
         # При фиксированной цене 0.50 это значит, что модель почти не отклонилась
         # от монетки: ставить не на чем.
@@ -100,22 +106,22 @@ def decide(proba_up: float, tick: float = 0.01,
 
     crossing = best_ask is not None and best_ask <= price + 1e-9
     if not crossing:
-        return Decision(side, price, config.SHARES, proba_up, ev,
+        return Decision(side, price, shares, proba_up, ev,
                         f"p(Up)={proba_up:.4f}, EV={ev:+.3f}$, пассивно")
 
     # Сравниваем не с нулём, а с пассивным вариантом: важно, что выгоднее, а не что
     # просто прибыльно. Дешёвое предложение окупает комиссию (0.47 даёт эффективную
     # цену 0.4874 против 0.50), цена вровень с нашей — нет.
-    ev_taker = expected_value(proba_up, best_ask, side, taker=True)
+    ev_taker = expected_value(proba_up, best_ask, side, shares=shares, taker=True)
     if ev_taker <= ev:
         # Пересечение невыгодно. Всё равно отправляем пассивно: если стакан
         # шевельнётся, ордер ляжет в книгу, а если нет — биржа его отклонит,
         # и это правильный исход, а не потеря.
-        return Decision(side, price, config.SHARES, proba_up, ev,
+        return Decision(side, price, shares, proba_up, ev,
                         f"p(Up)={proba_up:.4f}, EV={ev:+.3f}$; ask {best_ask:.2f} "
                         f"тейкером дал бы {ev_taker:+.3f}$ — только пассивно")
 
-    return Decision(side, price, config.SHARES, proba_up, ev_taker,
+    return Decision(side, price, shares, proba_up, ev_taker,
                     f"p(Up)={proba_up:.4f}, ask {best_ask:.2f}, EV тейкером "
                     f"{ev_taker:+.3f}$ против {ev:+.3f}$ пассивно — берём",
                     cross=True)
