@@ -188,19 +188,14 @@ def _quote(*lines: str) -> str:
     return f"<blockquote>{body}</blockquote>" if body else ""
 
 
-def _account_table(account: tuple[float, float] | None) -> str:
-    """Portfolio/Cash мини-таблицей — моноширинным <pre>, Telegram не умеет в
-    настоящие HTML-таблицы. `account` — `(cash, portfolio)` от
-    `ClobTrader.account_value()`; None — не показываем (бумажный режим или не
-    удалось получить)."""
+def _account_line(account: tuple[float, float] | None) -> str:
+    """Portfolio/Cash одной строкой — как в приложении Polymarket. `account` —
+    `(cash, portfolio)` от `ClobTrader.account_value()`; None — не показываем
+    (бумажный режим или не удалось получить)."""
     if account is None:
         return ""
     cash, portfolio = account
-    rows = [("Портфель", f"{portfolio:.2f}$"), ("Кэш", f"{cash:.2f}$")]
-    label_w = max(len(label) for label, _ in rows)
-    value_w = max(len(value) for _, value in rows)
-    lines = [f"{label.ljust(label_w)}  {value.rjust(value_w)}" for label, value in rows]
-    return "<pre>" + "\n".join(lines) + "</pre>"
+    return f"💰 Портфель {portfolio:.2f}$ / Кэш {cash:.2f}$"
 
 
 # ----------------------------------------------------------------------
@@ -222,7 +217,7 @@ def order_placed(hour_start: dt.datetime, side: str, price: float, shares: float
     details = _quote(f"Модель даёт {q * 100:.1f}% на {side}, безубыток "
                      f"{price * 100:.1f}% → запас {(q - price) * 100:+.1f} п.п.",
                      f"EV {ev:+.3f}$, в риске {shares * price:.2f}$", book_line)
-    sections = [header, details, _account_table(account)]
+    sections = [header, details, _account_line(account)]
     send("\n\n".join(s for s in sections if s), silent=True)
 
 
@@ -244,7 +239,7 @@ def filled(hour_start: dt.datetime, side: str, price: float, shares: float,
     details = _quote(f"Всего {price * shares + fee:.2f}$ = {_cents(eff)} за шейр "
                      f"(так и покажет Polymarket)",
                      f"Отбивается при {eff * 100:.1f}% угаданных")
-    sections = [header, details, _account_table(account)]
+    sections = [header, details, _account_line(account)]
     send("\n\n".join(s for s in sections if s))
 
 
@@ -261,7 +256,7 @@ def resolved(hour_start: dt.datetime, side: str, outcome: str, won: bool,
                  f"{total['точность, %']:.1f}%)") if total else ""
     header = f"{head} · итог {outcome}\n{meta}"
     details = _quote(f"Результат <b>{pnl:+.2f}$</b>", total_line)
-    sections = [header, details, _account_table(account)]
+    sections = [header, details, _account_line(account)]
     send("\n\n".join(s for s in sections if s), silent=True)
 
 
