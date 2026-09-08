@@ -105,15 +105,60 @@ class Listener(threading.Thread):
         r.raise_for_status()
         return r.json().get("result")
 
-    def _reply(self, chat_id, answer: "str | Reply") -> None:
+    def _try_edit(self, chat_id, message_id: int, params: dict) -> bool:
+        """editMessageText вместо нового сообщения — навигация по кнопкам
+        (/menu → /stats → /stats about → назад) правит одно и то же сообщение,
+        а не плодит новые. Возвращает False, если править нечего или нельзя
+        (сообщение старше 48ч, или это фото — из фото текстом не сделать: тогда
+        `_reply` сам откатится на sendMessage).
+
+        Идёт мимо `_call`: там `raise_for_status()` теряет тело ответа, а
+        Telegram кладёт причину отказа именно в JSON (`description`), и «текст
+        не изменился» — не ошибка, а сигнал молча посчитать это успехом.
+        """
+        try:
+            r = httpx.post(_API.format(token=config.TELEGRAM_BOT_TOKEN,
+                                       method="editMessageText"),
+                           json={**params, "chat_id": chat_id, "message_id": message_id},
+                           timeout=_TIMEOUT)
+        except Exception as e:                                # noqa: BLE001
+            log.debug("editMessageText failed: {}", notify_safe(str(e)))
+            return False
+        if r.status_code == 200:
+            return True
+        desc = ""
+        try:
+            desc = r.json().get("description", "")
+        except Exception:                                     # noqa: BLE001
+            pass
+        if "message is not modified" in desc.lower():
+            return True
+        log.debug("editMessageText declined: {}", notify_safe(desc or str(r.status_code)))
+        return False
+
+    def _reply(self, chat_id, answer: "str | Reply", message_id: int | None = None) -> None:
+        """Ответить автору. `message_id` — если ответ пришёл с кнопки, правим то
+        же сообщение (см. `_try_edit`); на набранную руками команду его нет —
+        отвечать можно только новым сообщением."""
         if isinstance(answer, str):
             answer = Reply(answer)
+        markup = {"inline_keyboard": [
+            [{"text": label, "callback_data": cmd} for label, cmd in row]
+            for row in answer.buttons]} if answer.buttons else None
+
+        if message_id is not None:
+            # reply_markup передаём всегда, даже пустым — иначе на сообщении,
+            # где новый ответ кнопок не несёт, остались бы старые.
+            edit_params = dict(text=answer.text, parse_mode="HTML",
+                               disable_web_page_preview=True,
+                               reply_markup=markup or {"inline_keyboard": []})
+            if self._try_edit(chat_id, message_id, edit_params):
+                return
+
         params: dict = dict(chat_id=chat_id, text=answer.text, parse_mode="HTML",
                             disable_web_page_preview=True)
-        if answer.buttons:
-            params["reply_markup"] = {"inline_keyboard": [
-                [{"text": label, "callback_data": cmd} for label, cmd in row]
-                for row in answer.buttons]}
+        if markup:
+            params["reply_markup"] = markup
         try:
             self._call("sendMessage", **params)
         except Exception as e:                                # noqa: BLE001
@@ -209,7 +254,9 @@ class Listener(threading.Thread):
         мы ничего не станем.
         """
         author = str((query.get("from") or {}).get("id", ""))
-        chat_id = ((query.get("message") or {}).get("chat") or {}).get("id")
+        msg = query.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        message_id = msg.get("message_id")
         try:
             self._call("answerCallbackQuery", callback_query_id=query.get("id"))
         except Exception as e:                                # noqa: BLE001
@@ -220,17 +267,22 @@ class Listener(threading.Thread):
             log.warning("button {!r} from unauthorized id {} — ignoring",
                         query.get("data"), author or "?")
             return
-        self._run(query.get("data") or "", chat_id, author)
+        self._run(query.get("data") or "", chat_id, author, message_id=message_id)
 
-    def _run(self, text: str, chat_id, author: str) -> None:
-        """Выполнить команду — хоть набранную, хоть пришедшую с кнопки."""
+    def _run(self, text: str, chat_id, author: str, message_id: int | None = None) -> None:
+        """Выполнить команду — хоть набранную, хоть пришедшую с кнопки.
+
+        `message_id` — только у кнопки: с неё правим то же сообщение вместо
+        нового (см. `_reply`); у набранной руками команды его нет и быть не
+        может, ответ всегда новым сообщением.
+        """
         # /stop@botname arg -> ("stop", "arg")
         head, _, arg = text.strip().partition(" ")
         cmd = head.split("@")[0].lstrip("/").lower()
         command = self.commands.get(cmd)
         if command is None:
             self._reply(chat_id, "Не знаю такой команды. Меню — /menu, "
-                                 "список — /help.")
+                                 "список — /help.", message_id=message_id)
             return
 
         log.info("command /{} from {}", cmd, author)
@@ -240,7 +292,7 @@ class Listener(threading.Thread):
             log.exception("handler /{} crashed", cmd)
             answer = f"Команда не выполнена: {e}"
         if answer:
-            self._reply(chat_id, answer)
+            self._reply(chat_id, answer, message_id=message_id)
 
 
 def notify_safe(text: str) -> str:

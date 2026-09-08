@@ -160,6 +160,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                   else ("⏸ Пауза", "/pause"))
         return [[("📊 Статус", "/status"), ("📈 Статистика", "/stats")],
                 [toggle, ("📄 Лог", "/log")],
+                [("💰 Ставка", "/shares")],
                 [("🛑 Остановить", "/stop ask")]]
 
     def menu(_: str = "") -> commands.Reply:
@@ -168,7 +169,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
             f"Сейчас: {'на паузе' if bot.paused else 'работает'}",
             buttons=menu_buttons())
 
-    def status(_: str = "") -> str:
+    def status(_: str = "") -> commands.Reply:
         now = dt.datetime.now(dt.timezone.utc)
         midnight = dt.datetime.combine(now.date(), dt.time.min, tzinfo=dt.timezone.utc)
         with storage.session() as s:
@@ -203,7 +204,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                                  f"по {(fp or 0) * 100:.1f}¢ — {st}")
         else:
             lines.append("Открытых позиций нет")
-        return "\n".join(lines)
+        return commands.Reply("\n".join(lines), buttons=menu_buttons())
 
     def stop_cmd(arg: str = "") -> "str | commands.Reply":
         """Остановка бота. С кнопки — через переспрос, руками — сразу.
@@ -234,7 +235,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         return commands.Reply("▶️ Продолжаю. Ставки со следующего часа.",
                               buttons=menu_buttons())
 
-    def shares_cmd(arg: str = "") -> str:
+    def shares_cmd(arg: str = "") -> commands.Reply:
         """Изменить размер ставки на лету. `/shares` — показать текущий.
 
         Действует со следующего решения — открытые позиции не трогает (у них
@@ -246,20 +247,27 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         with storage.session() as s:
             current = storage.current_shares(s)
         if not arg:
-            return f"Сейчас ставка {current:g} шейров.\nИзменить: /shares 15"
+            return commands.Reply(
+                f"💰 Сейчас ставка {current:g} шейров.\nИзменить: /shares 15",
+                buttons=menu_buttons())
         try:
             new = float(arg)
         except ValueError:
-            return "Не понял число. Пример: /shares 15"
+            return commands.Reply("Не понял число. Пример: /shares 15",
+                                  buttons=menu_buttons())
         if new < 5:                     # orderMinSize у часовых рынков — меньше нельзя
-            return "Меньше 5 нельзя — минимум ордера на бирже (orderMinSize)."
+            return commands.Reply(
+                "Меньше 5 нельзя — минимум ордера на бирже (orderMinSize).",
+                buttons=menu_buttons())
         with storage.session() as s:
             change = storage.set_shares(s, new)
         if change is None:
-            return f"Уже стоит {current:g} — менять нечего."
-        return (f"✅ Ставка изменена: {change.old_shares:g} → {change.new_shares:g} "
-               f"шейров.\nПрименится со следующего решения, открытые позиции "
-               f"не трогает.")
+            return commands.Reply(f"Уже стоит {current:g} — менять нечего.",
+                                  buttons=menu_buttons())
+        return commands.Reply(
+            f"✅ Ставка изменена: {change.old_shares:g} → {change.new_shares:g} "
+            f"шейров.\nПрименится со следующего решения, открытые позиции "
+            f"не трогает.", buttons=menu_buttons())
 
     def log_cmd(arg: str = "") -> str:
         """Прислать текущий лог файлом. `/log` — хвост, `/log all` — целиком.
