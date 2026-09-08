@@ -31,7 +31,7 @@ import threading
 import pandas as pd
 
 import config
-from app import commands, features, notify, risk, storage
+from app import charts, commands, features, notify, risk, storage
 from app import log as applog
 from app.log import get
 
@@ -158,7 +158,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         """
         toggle = (("▶️ Продолжить", "/resume") if bot.paused
                   else ("⏸ Пауза", "/pause"))
-        return [[("📊 Статус", "/status"), ("📈 Итоги 30д", "/stats")],
+        return [[("📊 Статус", "/status"), ("📈 Статистика", "/stats")],
                 [toggle, ("📄 Лог", "/log")],
                 [("🛑 Остановить", "/stop ask")]]
 
@@ -271,13 +271,29 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
             return ""                       # файл уже ушёл, дублировать нечем
         return "Не удалось отправить файл — подробности в логе."
 
-    def stats_cmd(_: str = "") -> str:
+    def stats_menu_buttons() -> list[list[tuple[str, str]]]:
+        return [[("📅 30 дней", "/stats 30d"), ("📈 Equity", "/stats equity")],
+                [("🎯 Уверенность модели", "/stats confidence")],
+                [("🪙 Угадывания", "/stats walk")],
+                [("ℹ️ Как это считается", "/stats about")],
+                [("⬅️ В меню", "/menu")]]
+
+    _CHARTS = {
+        "equity": (charts.equity_curve, "📈 <b>Equity curve</b>",
+                  "Пока нечего показать — ни одна ставка ещё не резолвнулась."),
+        "confidence": (charts.confidence_curve, "🎯 <b>Уверенность модели</b>",
+                       "Пока нечего показать — решений ещё не было."),
+        "walk": (charts.guess_walk, "🪙 <b>Угадывания</b>",
+                "Пока нечего показать — резолвнутых рынков ещё нет."),
+    }
+
+    def stats_30d() -> str:
         with storage.session() as s:
             month = storage.stats(s, dt.datetime.now(dt.timezone.utc)
                                   - dt.timedelta(days=30))
         if not month["ставок"]:
-            return "За 30 дней ставок не было"
-        return ("📊 <b>За 30 дней</b>\n"
+            return "📅 <b>За 30 дней</b>\nставок не было"
+        return ("📅 <b>За 30 дней</b>\n"
                 f"Ставок {month['ставок']}, угадано {month['угадано']} "
                 f"({month['точность, %']:.1f}%)\n"
                 f"P&amp;L {month['P&L, $']:+.2f}$, комиссий "
@@ -286,12 +302,53 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                 f"тейкером {month.get('тейкером', 0)}, "
                 f"пропущено {month.get('пропущено', 0)}")
 
+    _STATS_ABOUT = (
+        "ℹ️ <b>Как читать графики</b>\n"
+        "<blockquote><b>📈 Equity curve</b>\n"
+        "Кумулятивный P&amp;L по резолвнутым ставкам (только заполненные), по "
+        "порядку часов рынка. Каждая точка — сумма выигрышей и проигрышей "
+        "минус уплаченные комиссии на этот момент.</blockquote>\n"
+        "<blockquote><b>🎯 Уверенность модели</b>\n"
+        "P(Up), которую модель даёт каждому часу, где принималось решение — "
+        "включая пропущенные и незаполненные, не только реальные ставки. "
+        "Пунктир на 50% — модель не видит перевеса ни в одну сторону; чем "
+        "дальше линия от него в любую сторону, тем увереннее прогноз.</blockquote>\n"
+        "<blockquote><b>🪙 Угадывания</b>\n"
+        "Кумулятивная сумма ±1 (угадали/нет), у каждой линии свой шаг вправо — "
+        "считаются только её собственные события. Серая линия «по всем» — "
+        "каждый рынок с решённой стороной, даже если ордер не встал. Синяя "
+        "«по заполненным» — только там, где реально была ставка. Расхождение "
+        "линий показывает, сколько результата съедает именно исполнение, а не "
+        "качество прогноза.</blockquote>")
+
+    def stats_cmd(arg: str = "") -> "str | commands.Reply | None":
+        arg = (arg or "").strip().lower()
+
+        if arg in ("", "menu"):
+            return commands.Reply("📊 <b>Статистика</b>\nЧто показать?",
+                                  buttons=stats_menu_buttons())
+        if arg in ("30d", "30", "days", "месяц"):
+            return commands.Reply(stats_30d(), buttons=stats_menu_buttons())
+        if arg == "about":
+            return commands.Reply(_STATS_ABOUT, buttons=stats_menu_buttons())
+        if arg in _CHARTS:
+            fn, caption, empty_msg = _CHARTS[arg]
+            png = fn()
+            if png is None:
+                return commands.Reply(empty_msg, buttons=stats_menu_buttons())
+            if notify.send_photo(png, caption=caption, buttons=stats_menu_buttons()):
+                return None                 # картинка уже ушла, дублировать нечем
+            return commands.Reply("Не удалось отправить график — подробности в логе.",
+                                  buttons=stats_menu_buttons())
+        return commands.Reply("Не понял, что показать.", buttons=stats_menu_buttons())
+
     def help_cmd(_: str = "") -> commands.Reply:
         return commands.Reply(
             "<b>Команды</b>\n"
             "/menu — меню с кнопками\n"
             "/status — что происходит сейчас\n"
-            "/stats — итоги за 30 дней\n"
+            "/stats — статистика: 30 дней, графики (equity, уверенность модели, "
+            "угадывания) и разбор, как они считаются\n"
             "/log — прислать лог файлом (/log 500, /log all)\n"
             "/pause — не делать новых ставок\n"
             "/resume — снять паузу\n"
@@ -304,7 +361,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
     return {
         "menu": commands.Command(menu, "меню с кнопками"),
         "status": commands.Command(status, "что происходит сейчас"),
-        "stats": commands.Command(stats_cmd, "итоги за 30 дней"),
+        "stats": commands.Command(stats_cmd, "статистика: 30д, графики"),
         "log": commands.Command(log_cmd, "прислать лог файлом"),
         "pause": commands.Command(pause, "не делать новых ставок"),
         "resume": commands.Command(resume, "снять паузу"),

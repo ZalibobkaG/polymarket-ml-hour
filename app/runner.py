@@ -111,6 +111,10 @@ class Bot:
         if self.user_ws:
             self.user_ws.stop()
 
+    def _account(self) -> tuple[float, float] | None:
+        """(cash, portfolio) для уведомлений — только в бою, в бумаге денег нет."""
+        return self.trader.account_value() if self.trader.live else None
+
     # ------------------------------------------------------------------
     # Решение и ордер
     # ------------------------------------------------------------------
@@ -252,7 +256,8 @@ class Bot:
         if self.user_ws:
             self.user_ws.update_markets(self._live_conditions())
         notify.order_placed(hour_start, d.side, d.price, d.shares, d.proba_up,
-                            ev=d.ev_usd, cross=d.cross, bid=bid, ask=ask, tries=tries)
+                            ev=d.ev_usd, cross=d.cross, bid=bid, ask=ask, tries=tries,
+                            account=self._account())
         # Тейкерный ордер исполняется в момент постановки — не ждём следующего тика.
         self._sync_fill(pd.Timestamp(hour_start).to_pydatetime())
 
@@ -417,7 +422,7 @@ class Bot:
                     hour_start, side, res.filled_shares, got, res.role or "?",
                     res.fee_usd)
         notify.filled(hour_start, side, got, res.filled_shares,
-                      role=res.role, fee=res.fee_usd)
+                      role=res.role, fee=res.fee_usd, account=self._account())
 
     def poll_fills(self) -> None:
         """Проверить, не исполнились ли выставленные ордера."""
@@ -497,15 +502,12 @@ class Bot:
             log_fn("{} resolved {} (via {}), bet {} → {:+.2f}$",
                   hs, outcome, source, side or "-", pnl)
             if filled:
-                # Итоги считаем после записи, чтобы этот час уже был в них учтён.
-                midnight = dt.datetime.combine(now.date(), dt.time.min,
-                                               tzinfo=dt.timezone.utc)
+                # Итог считаем после записи, чтобы этот час уже был в нём учтён.
                 with storage.session() as s:
-                    day = storage.pnl_since(s, midnight)
                     total = storage.stats(s)
                 notify.resolved(hour_start, side, outcome, bool(won), pnl,
                                 price=price, shares=filled,
-                                day_pnl=day, total=total)
+                                total=total, account=self._account())
 
     # ------------------------------------------------------------------
 

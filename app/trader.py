@@ -188,6 +188,30 @@ class ClobTrader:
             log.error("balance {:.2f}$, need {:.2f}$ for the bet", balance, need)
         return balance
 
+    #: Публичный (без ключей) Data-API Polymarket — им же пользуется их сайт для
+    #: строки «Portfolio». Отдаёт суммарную стоимость открытых позиций по адресу;
+    #: portfolio = эта стоимость + кэш, ровно как в интерфейсе.
+    _VALUE_API = "https://data-api.polymarket.com/value"
+
+    def account_value(self) -> tuple[float, float] | None:
+        """(cash, portfolio) в долларах — как на сайте Polymarket, или None."""
+        if not config.FUNDER_ADDRESS:
+            return None
+        cash = self.check_funds()
+        if cash is None:
+            return None
+        try:
+            import httpx
+            r = httpx.get(self._VALUE_API, params={"user": config.FUNDER_ADDRESS},
+                          timeout=10.0)
+            r.raise_for_status()
+            data = r.json()
+            positions = float(data[0]["value"]) if data else 0.0
+        except Exception as e:                                # noqa: BLE001
+            log.warning("could not fetch portfolio value: {}", e)
+            return None
+        return cash, cash + positions
+
     def build_order(self, info: MarketInfo, side: str, price: float, shares: float):
         """Собрать и подписать ордер. Ничего не отправляет — только локально.
 
