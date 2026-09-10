@@ -13,6 +13,8 @@
     python main.py stats       сводка по накопленным сделкам
     python main.py retrain     переобучить модель на новых данных (см. app/retrain.py);
                                живой бот подхватит её сам, без перезапуска
+    python main.py replay      прогнать схему исполнения по записанному стакану и
+                               ленте сделок (см. app/replay.py); ничего не торгует
 
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
@@ -121,8 +123,6 @@ def _live_order_test(t, info) -> list[str]:
     if not res.ok:
         return [f"биржа не приняла ордер: {res.error}"]
     print(f"  принят, id {res.order_id}")
-    if res.filled_shares:
-        print(f"  ВНИМАНИЕ: неожиданно исполнилось {res.filled_shares:g} шейров")
     if t.cancel(res.order_id):
         print("  снят")
         return []
@@ -325,6 +325,19 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
                 "Пока нечего показать — резолвнутых рынков ещё нет."),
     }
 
+    def execution_lines(st: dict) -> str:
+        """Как исполнялись ставки: доли ролей, цена входа, комиссии по факту."""
+        if not st.get("решено ставить"):
+            return "Исполнение: резолвнутых ставок ещё нет"
+        unknown = st.get("комиссия неизвестна, ставок", 0)
+        return (f"Мейкер {st['мейкер, %']:.0f}% · сразу тейкер "
+                f"{st['сразу тейкер, %']:.0f}% · добор {st['добор, %']:.0f}% · "
+                f"без исполнения {st['без исполнения, %']:.0f}%\n"
+                f"Средняя цена входа {st['средняя цена входа'] * 100:.1f}¢\n"
+                f"Комиссий списано биржей {st['комиссий списано биржей, $']:.3f}$"
+                + (f" (по {unknown} ставкам неизвестно)" if unknown else "")
+                + f", по формуле {st.get('комиссии, $', 0):.3f}$")
+
     def stats_30d() -> str:
         with storage.session() as s:
             month = storage.stats(s, dt.datetime.now(dt.timezone.utc)
@@ -334,11 +347,9 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         return ("📅 <b>За 30 дней</b>\n"
                 f"Ставок {month['ставок']}, угадано {month['угадано']} "
                 f"({month['точность, %']:.1f}%)\n"
-                f"P&amp;L {month['P&L, $']:+.2f}$, комиссий "
-                f"{month.get('комиссии, $', 0):.3f}$\n"
-                f"Пассивно {month.get('пассивных', 0)}, "
-                f"тейкером {month.get('тейкером', 0)}, "
-                f"пропущено {month.get('пропущено', 0)}")
+                f"P&amp;L {month['P&L, $']:+.2f}$, "
+                f"пропущено {month.get('пропущено', 0)}\n"
+                + execution_lines(month))
 
     _STATS_ABOUT = (
         "ℹ️ <b>Как читать графики</b>\n"
@@ -363,7 +374,11 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
         arg = (arg or "").strip().lower()
 
         if arg in ("", "menu"):
-            return commands.Reply("📊 <b>Статистика</b>\nЧто показать?",
+            with storage.session() as s:
+                total = storage.stats(s)
+            return commands.Reply("📊 <b>Статистика</b>\n"
+                                  f"<b>Исполнение</b> (всё время)\n{execution_lines(total)}"
+                                  "\n\nЧто показать?",
                                   buttons=stats_menu_buttons())
         if arg in ("30d", "30", "days", "месяц"):
             return commands.Reply(stats_30d(), buttons=stats_menu_buttons())
@@ -479,8 +494,13 @@ def cmd_retrain() -> int:
     return retrain.run()
 
 
+def cmd_replay() -> int:
+    from app import replay
+    return replay.run(sys.argv[2:])
+
+
 COMMANDS = {"check": cmd_check, "once": cmd_once, "run": cmd_run, "stats": cmd_stats,
-           "retrain": cmd_retrain}
+           "retrain": cmd_retrain, "replay": cmd_replay}
 
 
 def main() -> int:

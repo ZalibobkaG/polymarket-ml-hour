@@ -207,7 +207,8 @@ def order_placed(hour_start: dt.datetime, side: str, price: float, shares: float
                  bid: float | None = None, ask: float | None = None,
                  tries: int = 1, account: tuple[float, float] | None = None) -> None:
     q = proba_up if side == "Up" else 1 - proba_up
-    how = "тейкером — цена окупает комиссию" if cross else "пассивно (post-only)"
+    how = ("аск уже не выше цены — исполнится сразу" if cross
+           else f"лимиткой в книгу до {config.CROSS_AFTER_SECONDS // 60}-й минуты")
     meta = f"{_hour(hour_start)} · {how}"
     if tries > 1:
         meta += f" · встали с {tries}-й попытки"
@@ -221,17 +222,18 @@ def order_placed(hour_start: dt.datetime, side: str, price: float, shares: float
     send("\n\n".join(s for s in sections if s), silent=True)
 
 
-_ROLE_NAMES = {"TAKER": "Тейкером", "MIXED": "Частями"}
+_ROLE_NAMES = {"TAKER": "Тейкером", "MIXED": "Частями",
+               "immediate_taker": "Сразу тейкером", "cross": "Добор тейкером"}
 
 
 def filled(hour_start: dt.datetime, side: str, price: float, shares: float,
            role: str | None = None, fee: float = 0.0,
            account: tuple[float, float] | None = None) -> None:
     eff = _effective(price, shares, fee)
-    if role == "MAKER":
-        role_line = "Пассивно — комиссии нет"
+    if role in ("MAKER", "maker"):
+        role_line = "Мейкером — комиссии нет"
     elif role:
-        role_line = f"{_ROLE_NAMES.get(role, role)} — комиссия {fee:.3f}$"
+        role_line = f"{_ROLE_NAMES.get(role, role)} — комиссия {fee:.3f}$ по формуле"
     else:
         role_line = ""
     meta = f"{_hour(hour_start)}" + (f" · {role_line}" if role_line else "")
@@ -297,9 +299,11 @@ def startup(problems: list[str]) -> None:
     body = [f"Ставка {shares:g} шейров по {_cents(config.LIMIT_PRICE)} "
            f"— {shares * config.LIMIT_PRICE:.2f}$ в час",
            f"Решение за {config.EARLY_SECONDS // 60} мин до часа"]
+    cross_min = config.CROSS_AFTER_SECONDS // 60
     if config.POST_ONLY:
-        body.append("Ставим пассивно, при отказе пробуем снова до начала часа; "
-                    "тейкером — только если цена окупает комиссию")
+        body.append(f"Ставим пассивно, при отказе пробуем снова до {cross_min}-й минуты")
+    body.append(f"Лимитка живёт до {cross_min}-й минуты, затем остаток добирается "
+                f"тейкером не дороже {_cents(config.TAKER_MAX)}")
     if config.DRY_RUN:
         body.append("Режим бумажный: ордера на биржу не уходят")
     send("🤖 <b>Бот запущен</b>\n" + _quote(*body), silent=True)

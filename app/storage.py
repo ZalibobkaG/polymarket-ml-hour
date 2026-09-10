@@ -36,6 +36,16 @@ UNFILLED = "unfilled"       # час кончился, так и не испол
 RESOLVED = "resolved"       # исход известен, P&L посчитан
 ERROR = "error"
 
+#: Чем набрана позиция (`Market.fill_role`) — по тому, какой кусок дал больше шейров.
+MAKER = "maker"                        # лимитку налили из книги
+IMMEDIATE_TAKER = "immediate_taker"    # аск уже был ≤ цены при постановке — сразу
+CROSS = "cross"                        # добор тейкером на CROSS_AFTER_SECONDS
+NO_FILL = "none"                       # ставку решили сделать, но ничего не налили
+ROLES = (MAKER, IMMEDIATE_TAKER, CROSS, NO_FILL)
+#: Строки, записанные до новой схемы исполнения: роль там — сторона биржи.
+#: Тейкером старая схема исполнялась только в момент постановки.
+_LEGACY_ROLES = {"MAKER": MAKER, "TAKER": IMMEDIATE_TAKER, "MIXED": "mixed"}
+
 
 class Market(Base):
     __tablename__ = "markets"
@@ -63,17 +73,32 @@ class Market(Base):
     # --- ордер
     order_id = Column(String(80), index=True)
     ordered_at = Column(DateTime(timezone=True))
-    #: Сколько раз пытались поставить пассивный ордер, прежде чем он лёг в книгу.
+    #: Когда заявка по этому часу впервые ушла на биржу.
+    place_ts = Column(DateTime(timezone=True))
+    #: Сколько раз пытались поставить ордер, прежде чем биржа его приняла.
     place_attempts = Column(Integer, default=0)
     filled_shares = Column(Float, default=0.0)
-    #: Средневзвешенная цена реального исполнения, не наша заявка. Может быть лучше
-    #: заявки: лимит 0.50 при предложении 0.47 покупается по 0.47.
+    #: Средневзвешенная цена реального исполнения всех кусков (лимитка + добор),
+    #: не наша заявка. Может быть лучше заявки: лимит 0.51 при аске 0.47 — по 0.47.
     fill_price = Column(Float)
     filled_at = Column(DateTime(timezone=True))
-    #: "MAKER" / "TAKER" / "MIXED" — от этого зависит комиссия.
-    fill_role = Column(String(8))
-    #: Комиссия тейкера в долларах, уже уплаченная (положительное = расход).
+    #: maker / immediate_taker / cross / none — см. константы выше. У строк до
+    #: новой схемы здесь "MAKER" / "TAKER" / "MIXED"; читать через `role_of`.
+    fill_role = Column(String(16))
+    #: Комиссия тейкера по формуле FEE_RATE·p·(1−p) — консервативная оценка, по
+    #: ней считается P&L. Сколько биржа списала на самом деле — `fee_charged_usd`.
     fee_usd = Column(Float, default=0.0)
+    #: Комиссия, которую биржа фактически начислила по нашим кускам (по данным
+    #: сделки). None — биржа не сообщила; 0.0 — сообщила, что не брала.
+    fee_charged_usd = Column(Float)
+
+    # --- добор тейкером (runner.cross_remaining)
+    #: Когда добор состоялся или от него отказались. Пишется ДО отправки заявки:
+    #: непустое значение означает «второго добора по этому часу не будет».
+    cross_ts = Column(DateTime(timezone=True))
+    cross_order_id = Column(String(80))
+    #: Что произошло с добором: цена, отказ по потолку, пауза, опоздание.
+    cross_note = Column(Text)
 
     # --- исход
     outcome = Column(String(4))              # фактический "Up"/"Down"
@@ -90,14 +115,14 @@ class Market(Base):
 
 
 class Quote(Base):
-    """Снимок стакана. Пишется в момент решения и в конце часа."""
+    """Снимок стакана. Пишется в момент решения и перед добором тейкером."""
 
     __tablename__ = "quotes"
 
     id = Column(Integer, primary_key=True)
     hour_start = Column(DateTime(timezone=True), nullable=False, index=True)
     taken_at = Column(DateTime(timezone=True), nullable=False)
-    tag = Column(String(16))                 # "decision" / "close"
+    tag = Column(String(16))                 # "decision" / "cross"
     best_bid_up = Column(Float)
     best_ask_up = Column(Float)
     best_bid_down = Column(Float)
@@ -227,9 +252,10 @@ def pending_resolution(s: Session, before: dt.datetime) -> list[Market]:
         .order_by(Market.hour_start)))
 
 
-def add_quote(s: Session, hour_start: dt.datetime, tag: str, book: dict) -> None:
-    s.add(Quote(hour_start=hour_start, taken_at=dt.datetime.now(dt.timezone.utc),
-                tag=tag, **book))
+def add_quote(s: Session, hour_start: dt.datetime, tag: str, book: dict,
+              at: dt.datetime | None = None) -> None:
+    s.add(Quote(hour_start=hour_start, tag=tag,
+                taken_at=at or dt.datetime.now(dt.timezone.utc), **book))
 
 
 def log_event(level: str, kind: str, message: str) -> None:
@@ -268,6 +294,47 @@ def pnl_since(s: Session, since: dt.datetime) -> float:
     return float(total or 0.0)
 
 
+def role_of(m: Market) -> str | None:
+    """Чем набрана позиция — в словаре новой схемы, в том числе у старых строк.
+
+    None — ставку по часу не решали (пропуск, ошибка). Строка до новой схемы с
+    "MIXED" возвращается как "mixed": из неё не восстановить, какой кусок был каким.
+    """
+    if not m.side:
+        return None
+    if not m.filled_shares:
+        return NO_FILL
+    role = m.fill_role or ""
+    return _LEGACY_ROLES.get(role, role or None)
+
+
+def execution(rows: list[Market]) -> dict:
+    """Сводка исполнения по строкам с решённой ставкой: доли ролей, цена, комиссии.
+
+    Доли считаются от всех часов, где ставку решили сделать, — включая те, где
+    ничего не налили (`none`). Средняя цена входа — по шейрам: сколько в среднем
+    заплатили за шейр по всем исполненным кускам.
+    """
+    bets = [m for m in rows if m.side]
+    roles = [role_of(m) for m in bets]
+    filled = [m for m in bets if m.filled_shares]
+    shares = sum(m.filled_shares for m in filled)
+    known = [m for m in filled if m.fee_charged_usd is not None]
+    out = {"решено ставить": len(bets)}
+    for role, label in ((MAKER, "мейкер"), (IMMEDIATE_TAKER, "сразу тейкер"),
+                        (CROSS, "добор"), (NO_FILL, "без исполнения")):
+        n = sum(r == role for r in roles)
+        out[f"{label}, %"] = n / len(bets) * 100 if bets else float("nan")
+    legacy = sum(r == "mixed" for r in roles)
+    if legacy:
+        out["смешанных (старые строки)"] = legacy
+    out["средняя цена входа"] = (sum((m.fill_price or m.price) * m.filled_shares
+                                     for m in filled) / shares) if shares else float("nan")
+    out["комиссий списано биржей, $"] = sum(m.fee_charged_usd for m in known)
+    out["комиссия неизвестна, ставок"] = len(filled) - len(known)
+    return out
+
+
 def stats(s: Session, since: dt.datetime | None = None) -> dict:
     q = select(Market).where(Market.status == RESOLVED,
                              Market.dry_run == config.DRY_RUN)
@@ -276,6 +343,7 @@ def stats(s: Session, since: dt.datetime | None = None) -> dict:
     rows = list(s.scalars(q))
     filled = [m for m in rows if m.filled_shares]
     wins = [m for m in filled if m.won]
+    roles = [role_of(m) for m in filled]
 
     # Пропуски живут отдельно: у них нет resolved_at, отбираем по часу рынка.
     sq = select(func.count()).select_from(Market).where(
@@ -289,10 +357,13 @@ def stats(s: Session, since: dt.datetime | None = None) -> dict:
         "угадано": len(wins),
         "точность, %": (len(wins) / len(filled) * 100) if filled else float("nan"),
         "P&L, $": sum(m.pnl_usd or 0.0 for m in filled),
+        # По формуле FEE_RATE — ею же уменьшен P&L; фактическое списание ниже.
         "комиссии, $": sum(m.fee_usd or 0.0 for m in filled),
-        "пассивных": sum(m.fill_role == "MAKER" for m in filled),
-        "тейкером": sum(m.fill_role == "TAKER" for m in filled),
+        # Ключи читает дневная сводка в Telegram: «пассивно N, тейкером M».
+        "пассивных": sum(r == MAKER for r in roles),
+        "тейкером": sum(r in (IMMEDIATE_TAKER, CROSS) for r in roles),
         "пропущено": int(s.scalar(sq) or 0),
         "ставок на Up, %": (sum(m.side == "Up" for m in filled) / len(filled) * 100)
                            if filled else float("nan"),
+        **execution(rows),
     }
