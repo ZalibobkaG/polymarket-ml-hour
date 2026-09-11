@@ -182,14 +182,16 @@ MAX_ENTRY_PRICE = 0.55
 # --- риск ----------------------------------------------------------------
 MAX_OPEN_POSITIONS = 3
 
-#: Лимиты считаны от разброса, а не «на глаз». При ставке 5 × 0.50 = 2.50$ на рынок
-#: и 24 рынках в сутки стандартное отклонение дневного результата — около 12$
-#: (√24 × 2.50), месячного при 725 ставках — около 67$ при ожидании +36$.
-#: Слишком тугой лимит останавливал бы бота на обычной полосе невезения: −15$ за день
-#: это всего 1.2 сигмы, то есть раз в неделю. Здесь взято ~3 сигмы за день
-#: и ~2 сигмы за месяц — редко при исправной модели, но ловит настоящую поломку.
+#: Лимиты считаны от разброса, а не «на глаз». При ставке 10 × 0.51 = 5.10$ на рынок
+#: и 24 рынках в сутки стандартное отклонение дневного результата — около 25$
+#: (√24 × 5.10), месячного при 725 ставках — около ±130$ при положительном ожидании.
+#: Дневной лимит 40$ — меньше 2 сигм, срабатывает на обычной полосе невезения
+#: и ловит настоящую поломку быстро. Было MONTHLY_LOSS_LIMIT_USD = 100.0 — это
+#: меньше обычного месячного разброса (±130$), лимит выключал бы бота примерно
+#: раз в двадцать месяцев без реальной поломки модели. Подняли до 300$, это
+#: заметно за пределами обычного шума и всё ещё далеко от «риска потерять всё».
 DAILY_LOSS_LIMIT_USD = 40.0
-MONTHLY_LOSS_LIMIT_USD = 100.0
+MONTHLY_LOSS_LIMIT_USD = 300.0
 
 # --- Polymarket ----------------------------------------------------------
 CLOB_HOST = "https://clob.polymarket.com"
@@ -247,3 +249,43 @@ CACHE_DIR = ROOT / "data" / "cache"
 
 #: WebSocket CLOB.
 WS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws"
+
+# --- settings.toml: необязательные переопределения ------------------------
+#: Файла нет — ничего не меняется, поведение как без него. Он не в git (см.
+#: .gitignore), поэтому `git pull` его не тронет; что в нём можно менять и с
+#: какими пределами — settings.example.toml. Разбор, проверка ключей и типов
+#: — settings.py; здесь только применение к уже определённым выше переменным
+#: и итоговая проверка диапазонов.
+import settings as _settings
+
+SETTINGS_PATH = ROOT / "settings.toml"
+_overrides = _settings.parse_file(SETTINGS_PATH)
+
+if "COIN" in _overrides:
+    # COIN определяет производные переменные (SYMBOL, KIT_DIR, ...) выше по
+    # файлу — если его переопределили, пересчитываем и их, иначе бот торговал
+    # бы, скажем, ETH моделью, обученной на BTC.
+    COIN = _overrides["COIN"]
+    if COIN not in COINS:
+        raise ValueError(
+            f"COIN={COIN!r} — неизвестная монета. Доступны: {', '.join(COINS)}."
+        )
+    _COIN = COINS[COIN]
+    COIN_TITLE = _COIN["title"]
+    SYMBOL = _COIN["symbol"]
+    PAIR = _COIN["pair"]
+    SLUG_PREFIX = _COIN["slug_prefix"]
+    MODEL_STEM = _COIN["model_stem"]
+    KIT_DIR = ROOT / _COIN["kit_dir"]
+
+for _key, _value in _overrides.items():
+    if _key != "COIN":
+        globals()[_key] = _value
+
+_effective = {_k: globals()[_k] for _k in _settings.ALLOWED_KEYS}
+_settings.validate_effective(_effective)
+
+#: Что реально взято из settings.toml — для строки в лог и телеграм при старте
+#: (main.py/app/notify.py).
+SETTINGS_OVERRIDES: dict = dict(_overrides)
+SETTINGS_SUMMARY: str = _settings.format_summary(_overrides)

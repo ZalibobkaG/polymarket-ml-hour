@@ -15,6 +15,8 @@
                                живой бот подхватит её сам, без перезапуска
     python main.py replay      прогнать схему исполнения по записанному стакану и
                                ленте сделок (см. app/replay.py); ничего не торгует
+    python main.py settings    проверить settings.toml и показать, какие параметры
+                               откуда взяты; ничего не торгует и не запускает
 
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
@@ -29,8 +31,48 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import sys
+
+
+def cmd_settings() -> int:
+    """python main.py settings — проверяет settings.toml и показывает итоговое
+    значение каждого параметра и источник (settings.toml или по умолчанию).
+    Ничего не запускает и не торгует.
+
+    Импортирует config сама, а не полагается на общий `import config` ниже по
+    файлу: если settings.toml невалиден, тот импорт уронит процесс трейсбеком
+    ещё до разбора команды — здесь ошибка ловится и печатается по-человечески,
+    с кодом возврата 1.
+
+    Секреты (приватный ключ, API-ключи, токен телеграма) в вывод не попадают
+    ни в каком виде: печатаются только ключи из settings.ALLOWED_KEYS, а
+    секретов там нет и быть не может (settings.py их туда не пускает).
+    """
+    import settings as settings_mod
+    try:
+        import config
+    except settings_mod.SettingsError as e:
+        print(f"settings.toml не прошёл проверку:\n  {e}")
+        return 1
+
+    overrides = config.SETTINGS_OVERRIDES
+    print(f"{'параметр':<24}{'значение':<14}источник")
+    for key in sorted(settings_mod.ALLOWED_KEYS):
+        value = getattr(config, key)
+        source = "settings.toml" if key in overrides else "по умолчанию"
+        print(f"{key:<24}{value!r:<14}{source}")
+    print()
+    if overrides:
+        print("OK — settings.toml прошёл проверку.")
+    else:
+        print("OK — settings.toml не найден или пуст, всё по умолчанию.")
+    return 0
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["settings"]:
+    raise SystemExit(cmd_settings())
+
+import datetime as dt
 import threading
 
 import pandas as pd
@@ -426,6 +468,7 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
 
 
 def cmd_run() -> int:
+    log.info(config.SETTINGS_SUMMARY)
     problems = risk.preflight()
     if problems:
         for p in problems:
