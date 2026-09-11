@@ -1,3 +1,5 @@
+> Это боевая копия (ветка execution-limit051-cross). Остальные локальные копии (ml_btc_poly, polymarket-machine_learning) — устаревшие, не запускать.
+
 # Торговый бот Polymarket: часовые рынки BTC Up/Down
 
 Бот раз в час предсказывает исход рынка "Bitcoin Up or Down" и выставляет лимитный
