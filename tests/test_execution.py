@@ -55,11 +55,21 @@ def test_decide_marketable_is_normal_outcome_not_a_reason_to_skip():
     assert d.ev_usd == pytest.approx(pricing.expected_value(0.60, 0.51, "Up", 10))
 
 
-def test_decide_keeps_positive_ev_check():
-    assert not pricing.decide(0.505, tick=0.01, best_ask=0.55, shares=10).bet
-    assert pricing.decide(0.52, tick=0.01, best_ask=0.55, shares=10).bet
+def test_decide_bets_every_hour_regardless_of_probability():
+    # Отказа по матожиданию нет: EV ≤ 0 только пишется в журнал.
+    d = pricing.decide(0.505, tick=0.01, best_ask=0.55, shares=10)
+    assert d.bet and d.side == "Up" and d.shares == 10
+    assert d.ev_usd < 0 and "EV=" in d.reason
+    assert pricing.decide(0.52, tick=0.01, best_ask=0.55, shares=10).side == "Up"
     d = pricing.decide(0.30, tick=0.01, best_ask=0.55, shares=10)
     assert d.bet and d.side == "Down"
+
+
+def test_decide_side_flips_at_one_half_without_threshold():
+    up = pricing.decide(0.5005, tick=0.01, best_ask=0.55, shares=10)
+    down = pricing.decide(0.4995, tick=0.01, best_ask=0.55, shares=10)
+    assert up.bet and up.side == "Up"
+    assert down.bet and down.side == "Down"
 
 
 def test_decide_keeps_max_entry_price_check(monkeypatch):

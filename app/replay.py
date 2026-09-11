@@ -2,7 +2,6 @@
 
     python main.py replay                       новая схема, исполнение по очереди
     python main.py replay --fill touch          то же, но живой PaperTrader («по касанию»)
-    python main.py replay --no-ev-filter        диагностика: ставить каждый час
     python main.py replay --scheme old          старая схема (0.49, post-only, без добора)
 
 Зачем. Бумажный режим в реальном времени копит 200 часов больше недели, а стакан
@@ -151,7 +150,10 @@ class Tape:
                                       "fee"])
         resolved = pd.read_csv(files["resolved.csv"])
         resolved = resolved[resolved.slug.str.startswith("bitcoin")]
-        #: Проверка того, на чём держится весь спор о комиссии.
+        #: Поле комиссии в публичной ленте сделок Polymarket не заполняется —
+        #: нулей здесь ожидаемо 100%. Это НЕ проверка того, берёт ли биржа
+        #: комиссию по факту (она берёт, см. блок комиссий в config.py), только
+        #: диагностика самой записи.
         self.trades_total = len(trades)
         self.trades_fee_nonzero = int((trades.fee != 0).sum())
 
@@ -491,12 +493,24 @@ def _summary(hours: list[pd.Timestamp], tape: Tape, qt: "QueueTrader | None",
     errors = [m for m in ms if m is None or m.status == storage.ERROR]
 
     # На шейр ставки в час — как в замере: сумма P&L / (размер ставки × все часы).
+    # `pnl_usd` уже уменьшен на комиссию (`_sync_fill` списывает её с тейкерных
+    # кусков) — вариант без комиссии получаем, прибавив её обратно.
     size = float(config.SHARES)
     pnl_fee = np.array([(m.pnl_usd or 0.0) if m is not None else 0.0 for m in ms])
     fee = np.array([(m.fee_usd or 0.0) if m is not None and m.filled_shares else 0.0
                     for m in ms])
-    per_share = (pnl_fee + fee) / size          # без комиссии (по факту её не было)
-    per_share_fee = pnl_fee / size              # с комиссией по формуле
+    per_share_fee = pnl_fee / size               # с комиссией по формуле — основной вариант
+    per_share_nofee = (pnl_fee + fee) / size      # без неё — справочно, комиссия реальна
+
+    # Диагностика для разбора «почему прирост с комиссией меньше»: доля тейкера
+    # в исполнении и проверка, что комиссия не залезает на мейкерные куски —
+    # у роли «мейкер» она обязана быть ~0 (см. tests/test_execution.py
+    # test_cross_role_when_cross_gives_most_shares — там же проверено на уровне
+    # кода, что комиссия считается только по тейкерным кускам).
+    taker_share_pct = (sum(r in (storage.IMMEDIATE_TAKER, storage.CROSS) for r in roles)
+                       / len(bets) * 100) if bets else float("nan")
+    maker_fee_usd = sum((m.fee_usd or 0.0) for m, r in zip(bets, roles)
+                        if r == storage.MAKER)
 
     def mean_ci(x):
         se = x.std(ddof=1) / math.sqrt(len(x)) if len(x) > 1 else float("nan")
@@ -534,6 +548,7 @@ def _summary(hours: list[pd.Timestamp], tape: Tape, qt: "QueueTrader | None",
         "мейкер, %": sum(r == storage.MAKER for r in roles) / len(bets) * 100,
         "сразу тейкер, %": sum(r == storage.IMMEDIATE_TAKER for r in roles) / len(bets) * 100,
         "добор, %": sum(r == storage.CROSS for r in roles) / len(bets) * 100,
+        "тейкер всего (сразу + добор), %": taker_share_pct,
         "без исполнения, %": sum(r == storage.NO_FILL for r in roles) / len(bets) * 100,
         "средняя цена входа": (sum((m.fill_price or m.price) * m.filled_shares
                                    for m in filled) / shares_total) if shares_total else None,
@@ -541,8 +556,9 @@ def _summary(hours: list[pd.Timestamp], tape: Tape, qt: "QueueTrader | None",
         "точность модели на всех часах, %": float(np.mean(model_hit) * 100),
         "точность на решённых ставках, %": float(np.mean(bet_hit) * 100) if bet_hit else None,
         "точность на исполненных, %": float(np.mean(fill_hit) * 100) if fill_hit else None,
-        "на шейр в час без комиссии": mean_ci(per_share),
         "на шейр в час с комиссией по формуле": mean_ci(per_share_fee),
+        "на шейр в час без комиссии (справочно)": mean_ci(per_share_nofee),
+        "комиссия на часах с ролью «мейкер», $": maker_fee_usd,
         "итог добора": notes,
         "сделок в ленте": tape.trades_total,
         "сделок с ненулевой комиссией": tape.trades_fee_nonzero,
@@ -618,7 +634,6 @@ def run(argv: list[str]) -> int:
     ap.add_argument("--sell-only", action="store_true",
                     help="очередь съедают только продажи нашего токена (строже)")
     ap.add_argument("--scheme", choices=("new", "old"), default="new")
-    ap.add_argument("--no-ev-filter", action="store_true")
     ap.add_argument("--hours", type=int, default=0, help="взять только первые N часов")
     ap.add_argument("--json", type=Path, default=None, help="куда записать сводку")
     args = ap.parse_args(argv)
@@ -658,9 +673,6 @@ def run(argv: list[str]) -> int:
     _install_fake_model(pred)
     clock = Clock(hours[0] - pd.Timedelta(seconds=150 - TICK_PHASE_SECONDS))
     qt = _patch_world(tape, clock, set(hours), args.fill, sell_only=args.sell_only)
-    if args.no_ev_filter:
-        from app import pricing
-        pricing.expected_value = lambda *a, **k: 1e-9    # только диагностика реплея
 
     from app import storage
     from app.runner import Bot
@@ -668,7 +680,6 @@ def run(argv: list[str]) -> int:
     bot = Bot()
     label = (f"схема {args.scheme}, исполнение {args.fill}"
              + (" (только продажи)" if args.sell_only else "")
-             + (", без фильтра EV" if args.no_ev_filter else "")
              + f", {len(hours)} часов {hours[0]:%d.%m} – {hours[-1]:%d.%m}")
     print(f"{label}; прогноз: {args.pred.name}")
     ticks = _simulate(bot, clock, hours)
