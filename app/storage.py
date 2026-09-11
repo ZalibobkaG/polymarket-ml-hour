@@ -335,6 +335,83 @@ def execution(rows: list[Market]) -> dict:
     return out
 
 
+#: Причины отказа при доборе/постановке -> короткая человеческая категория для
+#: `python main.py stats --days N`. Подстрока ищется в `cross_note`/`reason` —
+#: текстах, которые уже пишет `app/runner.py` (`_cross_one`, `_finish_cross`,
+#: `_close_unfilled`); здесь только группировка существующих формулировок, без
+#: новых причин.
+_REASON_BUCKETS: tuple[tuple[str, str], ...] = (
+    ("стакан пуст", "пустой стакан"),
+    ("выше потолка", "аск выше потолка добора"),
+    ("меньше минимума", "остаток меньше минимума биржи"),
+    ("опоздали", "опоздали к добору"),
+    ("отмена лимитки не подтвердилась", "отмена лимитки не подтвердилась"),
+    ("пауза", "бот был на паузе"),
+    ("торговля выключена", "торговля выключена (TRADING_ENABLED)"),
+    ("не исполнился до конца часа", "не исполнился до конца часа"),
+)
+
+
+def _reason_bucket(text: str) -> str:
+    for needle, label in _REASON_BUCKETS:
+        if needle in text:
+            return label
+    return text or "причина не записана"
+
+
+def window_report(s: Session, since: dt.datetime, until: dt.datetime) -> dict:
+    """Сводка для `python main.py stats --days N`: доли решения/исполнения за
+    окно времени и разбивка отказов по причинам.
+
+    В отличие от `stats()` (только резолвнутые рынки), здесь — все часы, по
+    которым бот успел принять решение (любой статус, кроме `new`), включая ещё
+    не резолвнутые: смотреть предполагается на свежее окно, не дожидаясь
+    резолва последнего часа.
+
+    Знаменатель доли решения — часы календаря в окне (`until - since`), а не
+    строки в базе: если бот не работал часть окна, по этим часам строк в базе
+    вообще нет, и доля решения упадёт — это и есть сигнал простоя, а не только
+    пропуски по риск-лимиту.
+
+    «Отказы» — часы, где решили ставить, но так и не налили ни шейра, и это уже
+    окончательно (статус `unfilled`/`resolved`/`error`, а не ещё открытая
+    заявка `pending`/`ordered`): причина берётся из `cross_note`, а если его
+    нет — из `reason`, и группируется через `_reason_bucket`. Заявка, которая
+    просто ещё стоит в книге в пределах текущего часа, в «отказы» не попадает —
+    иначе окно, снятое посреди часа, показало бы решение о ставке как отказ.
+    """
+    rows = list(s.scalars(
+        select(Market)
+        .where(Market.hour_start >= since, Market.hour_start <= until)
+        .where(Market.status != NEW, Market.dry_run == config.DRY_RUN)
+        .order_by(Market.hour_start)))
+
+    total_hours = max(int((until - since).total_seconds() // 3600), 0)
+    bets = [m for m in rows if m.side]
+    filled = [m for m in bets if m.filled_shares]
+    no_fill = [m for m in bets if not m.filled_shares
+              and m.status in (UNFILLED, RESOLVED, ERROR)]
+    roles = [role_of(m) for m in filled]
+    maker_n = sum(r == MAKER for r in roles)
+    shares_sum = sum(m.filled_shares for m in filled)
+    avg_price = ((sum((m.fill_price or m.price) * m.filled_shares for m in filled)
+                 / shares_sum) if shares_sum else None)
+
+    reasons: dict[str, int] = {}
+    for m in no_fill:
+        label = _reason_bucket((m.cross_note or m.reason or "").strip())
+        reasons[label] = reasons.get(label, 0) + 1
+
+    return {
+        "часов в окне": total_hours,
+        "решено ставить": len(bets),
+        "исполнено (хотя бы частично)": len(filled),
+        "мейкером": maker_n,
+        "средняя цена входа": avg_price,
+        "отказы": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
+    }
+
+
 def stats(s: Session, since: dt.datetime | None = None) -> dict:
     q = select(Market).where(Market.status == RESOLVED,
                              Market.dry_run == config.DRY_RUN)

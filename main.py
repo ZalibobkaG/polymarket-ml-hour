@@ -11,12 +11,19 @@
                                /stats /log /pause /resume /stop — только с id
                                из TG_ALLOWED_USER_IDS
     python main.py stats       сводка по накопленным сделкам
+    python main.py stats --days N
+                               за последние N суток: доля решений/исполнений,
+                               доля мейкера, средняя цена входа, отказы по
+                               причинам; ничего не торгует
     python main.py retrain     переобучить модель на новых данных (см. app/retrain.py);
                                живой бот подхватит её сам, без перезапуска
     python main.py replay      прогнать схему исполнения по записанному стакану и
                                ленте сделок (см. app/replay.py); ничего не торгует
     python main.py settings    проверить settings.toml и показать, какие параметры
                                откуда взяты; ничего не торгует и не запускает
+    python main.py doctor      проверка готовности: .env, сеть, рынок, модель,
+                               часы, база, телеграм, settings.toml, режим; ничего
+                               не запускает и не торгует (см. app/doctor.py)
 
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
@@ -71,6 +78,22 @@ def cmd_settings() -> int:
 
 if __name__ == "__main__" and sys.argv[1:2] == ["settings"]:
     raise SystemExit(cmd_settings())
+
+
+def cmd_doctor() -> int:
+    """python main.py doctor — проверка готовности, см. `app/doctor.py`.
+
+    Особый ранний путь, как у `settings`: обычный `import config` ниже по
+    файлу падает трассировкой стека, если settings.toml сломан, а доктору
+    ровно это и надо уметь проверять и показывать человеческим текстом,
+    а не ронять весь процесс.
+    """
+    from app import doctor
+    return doctor.run()
+
+
+if __name__ == "__main__" and sys.argv[1:2] == ["doctor"]:
+    raise SystemExit(cmd_doctor())
 
 import datetime as dt
 import threading
@@ -515,7 +538,27 @@ def cmd_run() -> int:
     return code
 
 
-def cmd_stats() -> int:
+def _stats_days_arg() -> "int | None":
+    """Значение `--days` из аргументов командной строки. `None` — флага нет."""
+    if "--days" not in sys.argv:
+        return None
+    idx = sys.argv.index("--days")
+    if idx + 1 >= len(sys.argv):
+        raise ValueError("--days требует число, например: python main.py stats --days 3")
+    raw = sys.argv[idx + 1]
+    try:
+        days = int(raw)
+    except ValueError:
+        raise ValueError(f"--days: {raw!r} — не целое число суток") from None
+    if days <= 0:
+        raise ValueError("--days должен быть положительным числом")
+    return days
+
+
+def cmd_stats(days: "int | None" = None) -> int:
+    if days is not None:
+        return _cmd_stats_days(days)
+
     storage.init()
     with storage.session() as s:
         overall = storage.stats(s)
@@ -529,6 +572,45 @@ def cmd_stats() -> int:
     for k, v in month.items():
         print(f"  {k:18s} {v if not isinstance(v, float) else round(v, 2)}")
     print(f"\nоткрытых позиций: {open_n}")
+    return 0
+
+
+def _cmd_stats_days(days: int) -> int:
+    """python main.py stats --days N — доля решений/исполнения за N суток и
+    разбивка отказов по причинам (см. `storage.window_report`).
+
+    Считает все часы, по которым бот успел принять решение, включая ещё не
+    резолвнутые — в отличие от `python main.py stats` без флага, который
+    смотрит только на резолвнутые рынки.
+    """
+    storage.init()
+    until = dt.datetime.now(dt.timezone.utc)
+    since = until - dt.timedelta(days=days)
+    with storage.session() as s:
+        r = storage.window_report(s, since, until)
+
+    def pct(n: int, d: int) -> str:
+        return f"{n / d * 100:.1f}% ({n} из {d})" if d else "нет данных"
+
+    print(f"режим: {'БУМАГА' if config.DRY_RUN else 'БОЙ'}")
+    print(f"окно: последние {days} суток "
+         f"({since:%Y-%m-%d %H:%M} .. {until:%Y-%m-%d %H:%M} UTC)")
+    print(f"часов в окне: {r['часов в окне']}")
+    print()
+    print(f"решение принято:     {pct(r['решено ставить'], r['часов в окне'])}")
+    print(f"заявка исполнилась:  {pct(r['исполнено (хотя бы частично)'], r['решено ставить'])}")
+    print(f"доля мейкера:        "
+         f"{pct(r['мейкером'], r['исполнено (хотя бы частично)'])}")
+    price = r["средняя цена входа"]
+    print(f"средняя цена входа:  {price:.4f}" if price is not None
+         else "средняя цена входа:  нет исполненных ставок")
+    print()
+    print("отказы по причинам:")
+    if r["отказы"]:
+        for reason, n in r["отказы"].items():
+            print(f"  {reason:<38} {n}")
+    else:
+        print("  отказов нет")
     return 0
 
 
@@ -553,6 +635,13 @@ def main() -> int:
         return 2
     if cmd == "check":
         return cmd_check(live_order="--live-order" in sys.argv)
+    if cmd == "stats":
+        try:
+            days = _stats_days_arg()
+        except ValueError as e:
+            print(e)
+            return 2
+        return cmd_stats(days)
     return COMMANDS[cmd]()
 
 
