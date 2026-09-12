@@ -5,10 +5,10 @@
 отсутствие сети — это «не проверено», а не провал).
 
 Каждая проверка независима и защищена от падения остальных: сломанный
-settings.toml не должен уронить проверку переменных окружения, а отсутствие
+config.py не должен уронить проверку переменных окружения, а отсутствие
 сети — проверку контрольных сумм модели. Поэтому `config` импортируется один
-раз в начале в try/except (как в `cmd_settings()`), а всё, что от него зависит,
-при неудаче печатает «не проверено» вместо трассировки стека.
+раз в начале в try/except, а всё, что от него зависит, при неудаче печатает
+«не проверено» вместо трассировки стека.
 
 Секреты (приватный ключ, API-креды, токен телеграма) никогда не печатаются —
 ни значением, ни маской: только факт «заполнено» / «пусто», и ни один запрос
@@ -42,16 +42,15 @@ def _status(has_problem: bool) -> str:
 
 
 # --------------------------------------------------------------------------
-# config.py: единственная точка, где ловится сломанный settings.toml
+# config.py: единственная точка, где ловится сломанный config.py
 # --------------------------------------------------------------------------
 
 def _load_config():
     """(модуль config, None) при удаче, (None, текст ошибки) при неудаче.
 
-    Ловит любое исключение, а не только `settings.SettingsError`: COIN,
-    переопределённый в settings.toml на что-то неизвестное, падает в
-    config.py обычным `ValueError` — доктору всё равно нужно не упасть,
-    а сказать человеку, что не так.
+    Ловит любое исключение: неизвестный COIN падает в config.py обычным
+    `ValueError`, опечатка в числе — `SyntaxError` — доктору всё равно нужно
+    не упасть, а сказать человеку, что не так.
     """
     try:
         import config
@@ -477,18 +476,26 @@ def check_telegram(problems: list[str], config_mod) -> str:
 
 
 # --------------------------------------------------------------------------
-# 8. settings.toml
+# 8. config.py
 # --------------------------------------------------------------------------
 
-def check_settings(problems: list[str], config_mod, settings_error: str | None) -> str:
-    print("8. settings.toml")
-    if settings_error is not None:
-        print("   settings.toml не прошёл проверку:")
-        print(f"     {settings_error}")
-        problems.append(f"settings.toml не прошёл проверку: {settings_error}")
+#: Параметры, которые печатаются в пункте 8, — те, что напарнику запрещено
+#: менять (docs/НАПАРНИК_ПРОГОН.md, раздел 7) плюс размер ставки и лимиты.
+_CONFIG_KEYS = ("COIN", "LIMIT_PRICE", "POST_ONLY", "CROSS_AFTER_SECONDS",
+                "TAKER_MAX", "MAX_ENTRY_PRICE", "CUTOFF_MINUTES", "SHARES",
+                "DAILY_LOSS_LIMIT_USD", "MONTHLY_LOSS_LIMIT_USD", "TICK_SECONDS")
+
+
+def check_config(problems: list[str], config_mod, config_error: str | None) -> str:
+    print("8. config.py")
+    if config_error is not None:
+        print("   config.py не загрузился:")
+        print(f"     {config_error}")
+        problems.append(f"config.py не загрузился: {config_error}")
         print("   статус: нет")
         return "нет"
-    print(f"   {config_mod.SETTINGS_SUMMARY}")
+    for key in _CONFIG_KEYS:
+        print(f"   {key:<24}{getattr(config_mod, key, '?')!r}")
     print("   статус: есть")
     return "есть"
 
@@ -526,7 +533,7 @@ def run() -> int:
     print("=" * 60)
     print()
 
-    config_mod, settings_error = _load_config()
+    config_mod, config_error = _load_config()
     problems: list[str] = []
 
     check_env(problems, config_mod)
@@ -543,7 +550,7 @@ def run() -> int:
     print()
     check_telegram(problems, config_mod)
     print()
-    check_settings(problems, config_mod, settings_error)
+    check_config(problems, config_mod, config_error)
     print()
     check_mode(config_mod)
     print()

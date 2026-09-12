@@ -19,17 +19,16 @@
                                живой бот подхватит её сам, без перезапуска
     python main.py replay      прогнать схему исполнения по записанному стакану и
                                ленте сделок (см. app/replay.py); ничего не торгует
-    python main.py settings    проверить settings.toml и показать, какие параметры
-                               откуда взяты; ничего не торгует и не запускает
     python main.py doctor      проверка готовности: .env, сеть, рынок, модель,
-                               часы, база, телеграм, settings.toml, режим; ничего
+                               часы, база, телеграм, config.py, режим; ничего
                                не запускает и не торгует (см. app/doctor.py)
 
 Перед первым запуском:
     cp .env.example .env       и заполнить (для боевого режима)
 
-Монета выбирается в `config.py` строкой `COIN` ("btc" или "eth") — от неё зависят
-пара Binance, слаг рынка и комплект с моделью.
+Все параметры бота — в одном файле `config.py`: монета (`COIN`, "btc" или "eth"
+— от неё зависят пара Binance, слаг рынка и комплект с моделью), режим, цены,
+размер ставки, лимиты. Читаются один раз при старте.
 
 Модель — комплект под выбранную монету (`config.KIT_DIR`), уже обучена и лежит в репозитории
 готовым файлом. Раз в интервал обучения её стоит обновлять командой `retrain` —
@@ -41,52 +40,13 @@ from __future__ import annotations
 import sys
 
 
-def cmd_settings() -> int:
-    """python main.py settings — проверяет settings.toml и показывает итоговое
-    значение каждого параметра и источник (settings.toml или по умолчанию).
-    Ничего не запускает и не торгует.
-
-    Импортирует config сама, а не полагается на общий `import config` ниже по
-    файлу: если settings.toml невалиден, тот импорт уронит процесс трейсбеком
-    ещё до разбора команды — здесь ошибка ловится и печатается по-человечески,
-    с кодом возврата 1.
-
-    Секреты (приватный ключ, API-ключи, токен телеграма) в вывод не попадают
-    ни в каком виде: печатаются только ключи из settings.ALLOWED_KEYS, а
-    секретов там нет и быть не может (settings.py их туда не пускает).
-    """
-    import settings as settings_mod
-    try:
-        import config
-    except settings_mod.SettingsError as e:
-        print(f"settings.toml не прошёл проверку:\n  {e}")
-        return 1
-
-    overrides = config.SETTINGS_OVERRIDES
-    print(f"{'параметр':<24}{'значение':<14}источник")
-    for key in sorted(settings_mod.ALLOWED_KEYS):
-        value = getattr(config, key)
-        source = "settings.toml" if key in overrides else "по умолчанию"
-        print(f"{key:<24}{value!r:<14}{source}")
-    print()
-    if overrides:
-        print("OK — settings.toml прошёл проверку.")
-    else:
-        print("OK — settings.toml не найден или пуст, всё по умолчанию.")
-    return 0
-
-
-if __name__ == "__main__" and sys.argv[1:2] == ["settings"]:
-    raise SystemExit(cmd_settings())
-
-
 def cmd_doctor() -> int:
     """python main.py doctor — проверка готовности, см. `app/doctor.py`.
 
-    Особый ранний путь, как у `settings`: обычный `import config` ниже по
-    файлу падает трассировкой стека, если settings.toml сломан, а доктору
-    ровно это и надо уметь проверять и показывать человеческим текстом,
-    а не ронять весь процесс.
+    Особый ранний путь: обычный `import config` ниже по файлу падает
+    трассировкой стека, если config.py сломан (например, неизвестный COIN),
+    а доктору ровно это и надо уметь показать человеческим текстом, а не
+    ронять весь процесс.
     """
     from app import doctor
     return doctor.run()
@@ -106,10 +66,6 @@ from app import log as applog
 from app.log import get
 
 log = get("main")
-
-#: Как часто крутится основной цикл. Решение привязано к часу, а не к тику,
-#: поэтому частый опрос нужен только для отслеживания заполнения.
-TICK_SECONDS = 30
 
 #: Сколько строк лога шлёт `/log` без аргумента. Сутки — это около тысячи строк,
 #: так что по умолчанию уезжает примерно последний день, а не весь файл.
@@ -491,7 +447,6 @@ def _tg_handlers(bot, stop: threading.Event) -> dict:
 
 
 def cmd_run() -> int:
-    log.info(config.SETTINGS_SUMMARY)
     problems = risk.preflight()
     if problems:
         for p in problems:
@@ -506,7 +461,7 @@ def cmd_run() -> int:
     listener.start()
     notify.startup([])
     log.success("loop started, mode {}, tick {}s",
-               "PAPER" if config.DRY_RUN else "LIVE", TICK_SECONDS)
+               "PAPER" if config.DRY_RUN else "LIVE", config.TICK_SECONDS)
 
     last_summary_day = dt.datetime.now(dt.timezone.utc).date()
     code = 0
@@ -529,7 +484,7 @@ def cmd_run() -> int:
             storage.log_event("ERROR", "tick", str(e))
             notify.error("Ошибка в цикле", str(e)[:500])
         # Ожидание прерываемое: команда /stop не должна ждать конца тика.
-        stop.wait(TICK_SECONDS)
+        stop.wait(config.TICK_SECONDS)
 
     if stop.is_set():
         log.info("stopped via Telegram command")

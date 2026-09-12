@@ -5,8 +5,8 @@
 Каждая функция-проверка (`check_env`, `check_hosts`, ...) тестируется отдельно,
 с поддельными `config`/`app.markets`/`app.model`/httpx — без реальной сети и
 без настоящего комплекта модели. Настоящие модули (`config`, `app.storage`)
-используются только там, где это и есть предмет проверки (settings.toml,
-data/bot.db) — так же, как в `test_execution.py` и `test_settings.py`.
+используются только там, где это и есть предмет проверки (data/bot.db) —
+так же, как в `test_execution.py`.
 
 Секретность (пункт 1: значения переменных окружения нигде не печатаются)
 проверяется отдельно и жёстко: тест обязан упасть, если хоть один символ
@@ -40,7 +40,9 @@ def _cfg(**over):
         KIT_DIR=Path("/does/not/exist"), MODEL_STEM="poly_hourly",
         DB_PATH=Path("/does/not/exist/bot.db"),
         TELEGRAM_BOT_TOKEN="", TELEGRAM_CHAT_ID="", TG_ALLOWED_USER_IDS=[],
-        SETTINGS_SUMMARY="settings.toml: не найден или пуст, все параметры по умолчанию",
+        COIN="btc", LIMIT_PRICE=0.51, POST_ONLY=False, CROSS_AFTER_SECONDS=720,
+        TAKER_MAX=0.55, MAX_ENTRY_PRICE=0.55, CUTOFF_MINUTES=2, SHARES=10,
+        DAILY_LOSS_LIMIT_USD=40.0, MONTHLY_LOSS_LIMIT_USD=300.0, TICK_SECONDS=5,
     )
     base.update(over)
     return types.SimpleNamespace(**base)
@@ -496,21 +498,24 @@ def test_check_telegram_never_prints_token(monkeypatch, capsys):
 
 
 # ==========================================================================
-# 8. settings.toml
+# 8. config.py
 # ==========================================================================
 
-def test_check_settings_ok():
+def test_check_config_ok_prints_key_parameters(capsys):
     problems = []
-    status = doctor.check_settings(problems, _cfg(), None)
+    status = doctor.check_config(problems, _cfg(), None)
     assert status == "есть"
     assert problems == []
+    out = capsys.readouterr().out
+    assert "LIMIT_PRICE" in out and "0.51" in out
+    assert "TAKER_MAX" in out and "TICK_SECONDS" in out
 
 
-def test_check_settings_error():
+def test_check_config_error():
     problems = []
-    status = doctor.check_settings(problems, None, "TAKER_MAX: записано 0.1, допустимо 0.30-0.99")
+    status = doctor.check_config(problems, None, "COIN='xrp' — неизвестная монета")
     assert status == "нет"
-    assert any("TAKER_MAX" in p for p in problems)
+    assert any("COIN" in p for p in problems)
 
 
 # ==========================================================================
@@ -549,7 +554,7 @@ def test_run_returns_0_when_all_pass(monkeypatch):
     monkeypatch.setattr(doctor, "check_clock", lambda problems, p: "есть")
     monkeypatch.setattr(doctor, "check_db", lambda problems, c: "есть")
     monkeypatch.setattr(doctor, "check_telegram", lambda problems, c: "есть")
-    monkeypatch.setattr(doctor, "check_settings", lambda problems, c, e: "есть")
+    monkeypatch.setattr(doctor, "check_config", lambda problems, c, e: "есть")
     monkeypatch.setattr(doctor, "check_mode", lambda c: None)
 
     assert doctor.run() == 0
@@ -568,7 +573,7 @@ def test_run_returns_1_when_any_check_adds_a_problem(monkeypatch):
     monkeypatch.setattr(doctor, "check_clock", lambda problems, p: "есть")
     monkeypatch.setattr(doctor, "check_db", lambda problems, c: "есть")
     monkeypatch.setattr(doctor, "check_telegram", lambda problems, c: "есть")
-    monkeypatch.setattr(doctor, "check_settings", lambda problems, c, e: "есть")
+    monkeypatch.setattr(doctor, "check_config", lambda problems, c, e: "есть")
     monkeypatch.setattr(doctor, "check_mode", lambda c: None)
 
     assert doctor.run() == 1
@@ -577,7 +582,7 @@ def test_run_returns_1_when_any_check_adds_a_problem(monkeypatch):
 def test_run_not_проверено_alone_does_not_fail(monkeypatch, capsys):
     """«Не проверено» (нет сети) — не провал: без единой добавленной проблемы
     код возврата обязан остаться 0, даже если половина пунктов пропущена."""
-    monkeypatch.setattr(doctor, "_load_config", lambda: (None, "settings.toml сломан"))
+    monkeypatch.setattr(doctor, "_load_config", lambda: (None, "config.py сломан"))
     monkeypatch.setattr(doctor, "check_env", lambda problems, c: "есть")
     monkeypatch.setattr(doctor, "check_hosts", lambda problems, c: {})
     monkeypatch.setattr(doctor, "check_market", lambda problems, c, p: "не проверено")
@@ -586,13 +591,13 @@ def test_run_not_проверено_alone_does_not_fail(monkeypatch, capsys):
     monkeypatch.setattr(doctor, "check_db", lambda problems, c: "не проверено")
     monkeypatch.setattr(doctor, "check_telegram", lambda problems, c: "не проверено")
 
-    def bad_settings(problems, c, e):
-        problems.append(f"settings.toml не прошёл проверку: {e}")
+    def bad_config(problems, c, e):
+        problems.append(f"config.py не загрузился: {e}")
         return "нет"
-    monkeypatch.setattr(doctor, "check_settings", bad_settings)
+    monkeypatch.setattr(doctor, "check_config", bad_config)
     monkeypatch.setattr(doctor, "check_mode", lambda c: None)
 
-    # здесь settings.toml сломан -> это одна настоящая проблема, код возврата 1
+    # здесь config.py сломан -> это одна настоящая проблема, код возврата 1
     assert doctor.run() == 1
     out = capsys.readouterr().out
     assert "ПРОБЛЕМЫ" in out
@@ -613,25 +618,3 @@ def test_cmd_doctor_runs_without_traceback():
     assert result.returncode in (0, 1)
     for heading in ("1. ", "2. ", "3. ", "4. ", "5. ", "6. ", "7. ", "8. ", "9. "):
         assert heading in result.stdout
-
-
-def test_cmd_doctor_broken_settings_toml_reported_gracefully():
-    import subprocess
-    settings_file = ROOT / "settings.toml"
-    assert not settings_file.exists(), (
-        "в рабочем каталоге уже есть settings.toml — тест его не трогает, но "
-        "не должен запускаться поверх чужого файла"
-    )
-    settings_file.write_text("TAKER_MAX = 0.10\n", encoding="utf-8")
-    try:
-        result = subprocess.run(
-            [sys.executable, "main.py", "doctor"],
-            cwd=ROOT, capture_output=True, text=True, timeout=60,
-        )
-        out = result.stdout + result.stderr
-        assert "Traceback" not in out
-        assert result.returncode == 1
-        assert "TAKER_MAX" in result.stdout
-        assert "не проверено" in result.stdout  # пункты, зависящие от config
-    finally:
-        settings_file.unlink(missing_ok=True)

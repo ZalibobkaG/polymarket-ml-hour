@@ -68,6 +68,17 @@ DRY_RUN = True
 #: Аварийный рубильник: False — новых ордеров не ставим, начатое доводим до резолва.
 TRADING_ENABLED = True
 
+#: Период основного цикла (main.py run), секунд. Решение привязано к часу, а не
+#: к тику, поэтому частота нужна только для отслеживания исполнения и добора.
+#: В бою исполнение приходит мгновенно по WebSocket-каналу своих сделок, а опрос
+#: по REST — страховка на случай, если сокет отвалился. В бумаге сокета нет:
+#: бумажные заявки бирже неизвестны, и «налили или нет» решается только по
+#: опросу стакана — редкий тик терял бы касания цены между опросами. Стоимость
+#: тика: 2–3 запроса (Gamma /markets, CLOB /book или /trades) при лимитах
+#: 300 / 1500 / 9000 за 10 с (docs.polymarket.com, Rate limits) — запас в
+#: сотни раз, поэтому 5 с в обоих режимах.
+TICK_SECONDS = 5
+
 #: "early" — выставляем за EARLY_SECONDS до начала часа по частичной свече;
 #: "fresh" — в H:00:00 по полной свече.
 #: Проверено переобучением: ранний вход ничего не стоит (52.86% против 52.72%
@@ -249,43 +260,3 @@ CACHE_DIR = ROOT / "data" / "cache"
 
 #: WebSocket CLOB.
 WS_HOST = "wss://ws-subscriptions-clob.polymarket.com/ws"
-
-# --- settings.toml: необязательные переопределения ------------------------
-#: Файла нет — ничего не меняется, поведение как без него. Он не в git (см.
-#: .gitignore), поэтому `git pull` его не тронет; что в нём можно менять и с
-#: какими пределами — settings.example.toml. Разбор, проверка ключей и типов
-#: — settings.py; здесь только применение к уже определённым выше переменным
-#: и итоговая проверка диапазонов.
-import settings as _settings
-
-SETTINGS_PATH = ROOT / "settings.toml"
-_overrides = _settings.parse_file(SETTINGS_PATH)
-
-if "COIN" in _overrides:
-    # COIN определяет производные переменные (SYMBOL, KIT_DIR, ...) выше по
-    # файлу — если его переопределили, пересчитываем и их, иначе бот торговал
-    # бы, скажем, ETH моделью, обученной на BTC.
-    COIN = _overrides["COIN"]
-    if COIN not in COINS:
-        raise ValueError(
-            f"COIN={COIN!r} — неизвестная монета. Доступны: {', '.join(COINS)}."
-        )
-    _COIN = COINS[COIN]
-    COIN_TITLE = _COIN["title"]
-    SYMBOL = _COIN["symbol"]
-    PAIR = _COIN["pair"]
-    SLUG_PREFIX = _COIN["slug_prefix"]
-    MODEL_STEM = _COIN["model_stem"]
-    KIT_DIR = ROOT / _COIN["kit_dir"]
-
-for _key, _value in _overrides.items():
-    if _key != "COIN":
-        globals()[_key] = _value
-
-_effective = {_k: globals()[_k] for _k in _settings.ALLOWED_KEYS}
-_settings.validate_effective(_effective)
-
-#: Что реально взято из settings.toml — для строки в лог и телеграм при старте
-#: (main.py/app/notify.py).
-SETTINGS_OVERRIDES: dict = dict(_overrides)
-SETTINGS_SUMMARY: str = _settings.format_summary(_overrides)

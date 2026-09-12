@@ -298,8 +298,7 @@ def startup(problems: list[str]) -> None:
         shares = storage.current_shares(s)
     body = [f"Ставка {shares:g} шейров по {_cents(config.LIMIT_PRICE)} "
            f"— {shares * config.LIMIT_PRICE:.2f}$ в час",
-           f"Решение за {config.EARLY_SECONDS // 60} мин до часа",
-           config.SETTINGS_SUMMARY]
+           f"Решение за {config.EARLY_SECONDS // 60} мин до часа"]
     cross_min = config.CROSS_AFTER_SECONDS // 60
     if config.POST_ONLY:
         body.append(f"Ставим пассивно, при отказе пробуем снова до {cross_min}-й минуты")
