@@ -4,7 +4,7 @@
 
     H − 120с … H − 25с  окно решения: первый тик внутри него ставит лимитку по
                         LIMIT_PRICE; если аск уже не выше — она исполнится сразу
-    ... каждые 30 сек   опрос заполнения
+    ... каждые 5 сек    опрос заполнения (TICK_SECONDS)
     H + 11:55           лимитка истекает сама (GTD) — страховка на случай падения
     H + 12:00           первый тик после CROSS_AFTER_SECONDS: снять остаток лимитки,
                         дождаться подтверждения и добрать недостающее тейкером (FAK),
@@ -234,6 +234,8 @@ class Bot:
 
         book = markets.snapshot(info)
         now = _now()
+        if config.DEBUG_NOTIFY:
+            self._notify_decision_inputs(hour_start, proba, d, minutes, book)
         with storage.session() as s:
             m = storage.get_or_create(s, hour_start.to_pydatetime())
             m.slug, m.condition_id = info.slug, info.condition_id
@@ -255,6 +257,24 @@ class Bot:
         res, d, tries = self._place_until_resting(info, d, hour_start)
         self._record_placement(hour_start, info, d, res, tries,
                                bid=side_book.get("bid"), ask=side_book.get("ask"))
+
+    def _notify_decision_inputs(self, hour_start, proba, d, minutes, book) -> None:
+        """Отладка прогона (config.DEBUG_NOTIFY): вводные решения в Telegram.
+        Сбой здесь не должен стоить ставки — всё в try/except."""
+        try:
+            now = _now().to_pydatetime()
+            with storage.session() as s:
+                open_n = len(storage.open_positions(s))
+                pnl_day = storage.pnl_since(s, risk._day_start_et(now))
+                pnl_month = storage.pnl_since(s, risk._month_start_et(now))
+            last_ts = minutes.index[-1].to_pydatetime() if len(minutes) else None
+            last_close = float(minutes["close"].iloc[-1]) if "close" in minutes else None
+            notify.decision_inputs(hour_start.to_pydatetime(), proba, d.side or "-",
+                                   d.price, d.shares, book, last_ts, last_close,
+                                   marketable=d.cross, open_positions=open_n,
+                                   pnl_day=pnl_day, pnl_month=pnl_month)
+        except Exception as e:                                # noqa: BLE001
+            log.warning("debug notify (decision inputs) failed: {}", e)
 
     def _record_placement(self, hour_start, info, d, res, tries,
                           bid=None, ask=None) -> None:
@@ -651,6 +671,13 @@ class Bot:
                 m.reason = f"не исполнился: {m.cross_note}"[:2000]
                 log.warning("{}: nothing filled — {}", pd.Timestamp(hour_start),
                             m.cross_note)
+            snap = (m.side, m.shares or 0.0, m.filled_shares or 0.0, m.fill_price,
+                    m.fill_role, m.cross_note or "", m.status)
+        if config.DEBUG_NOTIFY:
+            try:
+                notify.cross_result(pd.Timestamp(hour_start).to_pydatetime(), *snap)
+            except Exception as e:                            # noqa: BLE001
+                log.warning("debug notify (cross) failed: {}", e)
 
     # ------------------------------------------------------------------
     # Резолв
@@ -663,10 +690,17 @@ class Bot:
         with storage.session() as s:
             rows = [(storage.as_utc(m.hour_start), m.side,
                      m.fill_price if m.fill_price else m.price,
-                     m.filled_shares, m.fee_usd or 0.0)
+                     m.filled_shares, m.fee_usd or 0.0,
+                     dict(shares=m.shares or 0.0, price=m.price,
+                          fill_price=m.fill_price, role=m.fill_role,
+                          fee_charged=m.fee_charged_usd,
+                          ordered_at=storage.as_utc(m.ordered_at) if m.ordered_at else None,
+                          filled_at=storage.as_utc(m.filled_at) if m.filled_at else None,
+                          cross_ts=storage.as_utc(m.cross_ts) if m.cross_ts else None,
+                          cross_note=m.cross_note))
                     for m in storage.pending_resolution(s, cutoff)]
 
-        for hour_start, side, price, filled, fee in rows:
+        for hour_start, side, price, filled, fee, exe in rows:
             hs = pd.Timestamp(hour_start)
             outcome = markets.outcome_from_binance(hs)
             source = "binance"
@@ -711,6 +745,15 @@ class Bot:
                 notify.resolved(hour_start, side, outcome, bool(won), pnl,
                                 price=price, shares=filled,
                                 total=total, account=self._account())
+            if config.DEBUG_NOTIFY and side:
+                try:
+                    notify.execution_breakdown(
+                        hour_start, side, exe["shares"], filled or 0.0, exe["price"],
+                        exe["fill_price"], exe["role"], fee, exe["fee_charged"],
+                        exe["ordered_at"], exe["filled_at"], exe["cross_ts"],
+                        exe["cross_note"])
+                except Exception as e:                        # noqa: BLE001
+                    log.warning("debug notify (breakdown) failed: {}", e)
 
     # ------------------------------------------------------------------
 

@@ -262,6 +262,89 @@ def resolved(hour_start: dt.datetime, side: str, outcome: str, won: bool,
     send("\n\n".join(s for s in sections if s), silent=True)
 
 
+# --------------------------------------------------------------------------
+# Отладка схемы исполнения (config.DEBUG_NOTIFY) — временно, на прогон
+# --------------------------------------------------------------------------
+
+def _debug_send(text: str) -> None:
+    if config.DEBUG_NOTIFY:
+        send(text, silent=True)
+
+
+def _px(p: float | None) -> str:
+    return _cents(p) if p is not None else "—"
+
+
+def decision_inputs(hour_start: dt.datetime, proba_up: float, side: str,
+                    price: float, shares: float, book: dict,
+                    last_minute: dt.datetime | None, last_close: float | None,
+                    marketable: bool, open_positions: int,
+                    pnl_day: float, pnl_month: float) -> None:
+    """Что видел бот в момент решения — до постановки заявки."""
+    q = proba_up if side == "Up" else 1 - proba_up
+    data_line = (f"Последняя минутка {last_minute:%H:%M}Z, close {last_close:,.2f}"
+                 if last_minute is not None and last_close is not None else "")
+    ask_side = book.get("best_ask_up" if side == "Up" else "best_ask_down")
+    how = (f"аск {_px(ask_side)} ≤ {_cents(price)} — исполнится сразу тейкером"
+           if marketable else
+           f"аск {_px(ask_side)} > {_cents(price)} — ляжет в книгу до "
+           f"{config.CROSS_AFTER_SECONDS // 60}-й минуты")
+    body = [
+        f"Модель: p(Up) = {proba_up:.4f} → сторона <b>{side}</b> ({q * 100:.1f}%)",
+        data_line,
+        f"Стакан Up: {_px(book.get('best_bid_up'))} / {_px(book.get('best_ask_up'))}"
+        f" · Down: {_px(book.get('best_bid_down'))} / {_px(book.get('best_ask_down'))}",
+        f"Заявка: {side} × {shares:g} по {_cents(price)}, {how}",
+        f"Риск: открытых позиций {open_positions}/{config.MAX_OPEN_POSITIONS}, "
+        f"день {pnl_day:+.2f}$ (лимит −{config.DAILY_LOSS_LIMIT_USD:.0f}$), "
+        f"месяц {pnl_month:+.2f}$ (лимит −{config.MONTHLY_LOSS_LIMIT_USD:.0f}$)",
+    ]
+    _debug_send(f"🧠 <b>Вводные решения</b>\n{_hour(hour_start)}\n\n" + _quote(*body))
+
+
+_ROLE_SHORT = {"maker": "мейкером", "immediate_taker": "сразу тейкером",
+               "cross": "добором", "none": "ничего"}
+
+
+def cross_result(hour_start: dt.datetime, side: str, shares: float,
+                 filled: float, fill_price: float | None, role: str | None,
+                 note: str, status: str) -> None:
+    """Что произошло на 12-й минуте: сколько налила лимитка, чем кончился добор."""
+    if filled:
+        got = (f"Набрано {filled:g} из {shares:g} по {_cents(fill_price or 0)} "
+               f"в среднем, в основном {_ROLE_SHORT.get(role or '', role or '?')}")
+    else:
+        got = f"Набрано 0 из {shares:g}"
+    outcome = ("час без ставки" if status == "unfilled"
+               else f"в игре с {filled:g} шейрами {side}")
+    _debug_send(f"🔁 <b>Добор, {config.CROSS_AFTER_SECONDS // 60}-я минута</b>\n"
+                f"{_hour(hour_start)}\n\n" + _quote(f"Решение: {note}", got,
+                                                     f"Итог: {outcome}"))
+
+
+def execution_breakdown(hour_start: dt.datetime, side: str, shares: float,
+                        filled: float, price: float | None, fill_price: float | None,
+                        role: str | None, fee: float, fee_charged: float | None,
+                        ordered_at: dt.datetime | None, filled_at: dt.datetime | None,
+                        cross_ts: dt.datetime | None, cross_note: str | None) -> None:
+    """Разбор исполнения часа — отдельным сообщением после исхода."""
+    def _secs(a, b) -> str:
+        return f"{(b - a).total_seconds():.0f} с" if a and b else "—"
+
+    body = [
+        f"Заявка {side} × {shares:g} по {_px(price)} → набрано {filled:g} "
+        f"по {_px(fill_price)} в среднем",
+        f"Роль: {_ROLE_SHORT.get(role or '', role or '—')}",
+        f"Комиссия по формуле {fee:.4f}$, биржа списала "
+        + ("?" if fee_charged is None else f"{fee_charged:.4f}$"),
+        f"От постановки до исполнения: {_secs(ordered_at, filled_at)}"
+        + (f" · добор на {_secs(ordered_at, cross_ts)} после постановки"
+           if cross_ts else " · до добора не дошло"),
+        f"Добор: {cross_note}" if cross_note else "",
+    ]
+    _debug_send(f"🧾 <b>Разбор исполнения</b>\n{_hour(hour_start)}\n\n" + _quote(*body))
+
+
 def skipped(hour_start: dt.datetime, reason: str) -> None:
     send(f"⏭ <b>Пропуск часа</b>\n" + _quote(_hour(hour_start), reason), silent=True)
 
